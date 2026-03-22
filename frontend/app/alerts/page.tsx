@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { Suspense } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { alertsApi } from '@/lib/api'
@@ -10,6 +10,14 @@ import Link from 'next/link'
 const LIMIT = 50
 
 export default function AlertsPage() {
+  return (
+    <Suspense fallback={<div className="text-center py-8 text-gray-400">Đang tải...</div>}>
+      <AlertsContent />
+    </Suspense>
+  )
+}
+
+function AlertsContent() {
   const params = useSearchParams()
   const router = useRouter()
 
