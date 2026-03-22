@@ -1,0 +1,189 @@
+"""Unit tests for Alert Engine M1 (Volume Scanner)."""
+import pytest
+import asyncio
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from app.services import alert_engine_m1
+from app.config import settings
+
+
+@pytest.fixture(autouse=True)
+def reset_m1_state():
+    """Reset global state between tests."""
+    alert_engine_m1._pending_confirms.clear()
+    yield
+    alert_engine_m1._pending_confirms.clear()
+
+
+@pytest.fixture
+def injected_m1(mock_pool, mock_redis):
+    pool, conn = mock_pool
+    queue = asyncio.Queue()
+    alert_engine_m1.inject_deps(pool, mock_redis, queue)
+    return pool, conn, mock_redis, queue
+
+
+class TestM1Process:
+    @pytest.mark.asyncio
+    async def test_no_alert_below_threshold(self, injected_m1, sample_bar):
+        """volume = 1.2M, baseline = 1M → ratio = 1.2x < 2.0x → no alert"""
+        pool, conn, redis, queue = injected_m1
+        bar = {**sample_bar, "volume": 1_200_000}
+
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
+            await alert_engine_m1.process(bar)
+
+        assert conn.fetchval.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_fires_alert_normal_threshold(self, injected_m1, sample_bar):
+        """volume = 2.1M, baseline = 1M → ratio = 2.1x >= 2.0x → fires"""
+        pool, conn, redis, queue = injected_m1
+        bar = {**sample_bar, "volume": 2_100_000,
+               "bar_time": datetime(2026, 3, 18, 2, 45, 0, tzinfo=timezone.utc)}  # 9:45 ICT — normal
+
+        conn.fetchval = AsyncMock(return_value=42)  # alert_id
+        redis.exists = AsyncMock(return_value=0)
+
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
+             patch("app.services.alert_engine_m1.notification") as mock_notif:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
+            mock_notif.send_volume_alert_email = AsyncMock()
+            await alert_engine_m1.process(bar)
+
+        conn.fetchval.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_fires_at_magic_threshold(self, injected_m1, sample_bar):
+        """volume = 1.6M, baseline = 1M → ratio = 1.6x >= 1.5x magic → fires"""
+        pool, conn, redis, queue = injected_m1
+        # 9:15 ICT = magic window
+        bar = {**sample_bar, "volume": 1_600_000}
+        conn.fetchval = AsyncMock(return_value=43)
+        redis.exists = AsyncMock(return_value=0)
+
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
+             patch("app.services.alert_engine_m1.notification") as mock_notif:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
+            mock_notif.send_volume_alert_email = AsyncMock()
+            await alert_engine_m1.process(bar)
+
+        conn.fetchval.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_alert_outside_trading_hours(self, injected_m1):
+        """bar_time at 8:00 ICT → slot=None → skip"""
+        pool, conn, redis, queue = injected_m1
+        bar = {
+            "ticker": "HPG",
+            "bar_time": datetime(2026, 3, 18, 1, 0, 0, tzinfo=timezone.utc),  # 8:00 ICT
+            "volume": 5_000_000,
+            "bu": 0, "sd": 0, "fb": 0, "fs": 0, "fn": 0,
+        }
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 100_000})
+            await alert_engine_m1.process(bar)
+
+        conn.fetchval.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_baseline_skips(self, injected_m1, sample_bar):
+        """No baseline for this slot → skip silently"""
+        pool, conn, redis, queue = injected_m1
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs:
+            mock_bs.get_baseline = AsyncMock(return_value=None)
+            await alert_engine_m1.process(sample_bar)
+
+        conn.fetchval.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_redis_throttle_prevents_double_fire(self, injected_m1, sample_bar):
+        """Redis throttle key exists → skip alert even if ratio >= threshold"""
+        pool, conn, redis, queue = injected_m1
+        redis.exists = AsyncMock(return_value=1)  # throttle active
+
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 100_000})
+            bar = {**sample_bar, "volume": 5_000_000}
+            await alert_engine_m1.process(bar)
+
+        conn.fetchval.assert_not_called()
+
+
+class TestBuPctCalculation:
+    @pytest.mark.asyncio
+    async def test_bu_pct_correct(self, injected_m1, sample_bar):
+        """bu=800k, sd=200k → bu_pct = 80.0"""
+        pool, conn, redis, queue = injected_m1
+        bar = {**sample_bar, "volume": 2_100_000, "bu": 800_000, "sd": 200_000,
+               "bar_time": datetime(2026, 3, 18, 2, 45, 0, tzinfo=timezone.utc)}
+        conn.fetchval = AsyncMock(return_value=44)
+        redis.exists = AsyncMock(return_value=0)
+
+        captured_args = []
+
+        async def fake_execute(*args):
+            captured_args.append(args)
+
+        conn.execute = AsyncMock(side_effect=fake_execute)
+
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
+             patch("app.services.alert_engine_m1.notification") as mock_notif:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
+            mock_notif.send_volume_alert_email = AsyncMock()
+            await alert_engine_m1.process(bar)
+
+        # Verify fetchval was called with correct bu_pct = 80.0
+        call_args = conn.fetchval.call_args
+        # bu_pct is the 6th positional arg in the INSERT
+        bu_pct_passed = call_args[0][6]  # index 6 = bu_pct param
+        assert abs(bu_pct_passed - 80.0) < 0.01
+
+    @pytest.mark.asyncio
+    async def test_bu_pct_zero_division(self, injected_m1, sample_bar):
+        """bu=0, sd=0 → bu_pct=None, no crash"""
+        pool, conn, redis, queue = injected_m1
+        bar = {**sample_bar, "volume": 2_100_000, "bu": 0, "sd": 0,
+               "bar_time": datetime(2026, 3, 18, 2, 45, 0, tzinfo=timezone.utc)}
+        conn.fetchval = AsyncMock(return_value=45)
+        redis.exists = AsyncMock(return_value=0)
+
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
+             patch("app.services.alert_engine_m1.notification") as mock_notif:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
+            mock_notif.send_volume_alert_email = AsyncMock()
+            await alert_engine_m1.process(bar)  # should not raise
+
+        call_args = conn.fetchval.call_args
+        bu_pct_passed = call_args[0][6]
+        assert bu_pct_passed is None
+
+
+class TestConfirmation:
+    @pytest.mark.asyncio
+    async def test_pending_confirm_stored(self, injected_m1, sample_bar):
+        """After alert fires, pending_confirms should have entry."""
+        pool, conn, redis, queue = injected_m1
+        bar = {**sample_bar, "volume": 2_500_000,
+               "bar_time": datetime(2026, 3, 18, 2, 45, 0, tzinfo=timezone.utc)}
+        conn.fetchval = AsyncMock(return_value=50)
+        redis.exists = AsyncMock(return_value=0)
+
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
+             patch("app.services.alert_engine_m1.notification") as mock_notif:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
+            mock_notif.send_volume_alert_email = AsyncMock()
+            await alert_engine_m1.process(bar)
+
+        assert "HPG" in alert_engine_m1._pending_confirms
+        pending = alert_engine_m1._pending_confirms["HPG"]
+        assert pending["alert_id"] == 50
+        # confirm_by_slot = slot + 15
+        from app.utils.trading_hours import get_slot
+        from app.utils.timezone import to_ict
+        ict = to_ict(bar["bar_time"])
+        expected_slot = get_slot(ict.time())
+        assert pending["slot"] == expected_slot
+        assert pending["confirm_by_slot"] == expected_slot + 15

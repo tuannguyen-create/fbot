@@ -1,0 +1,16 @@
+.env
+.env.local
+.env.prod
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+dist/
+build/
+*.log
+node_modules/
+.next/
+frontend/.env.local

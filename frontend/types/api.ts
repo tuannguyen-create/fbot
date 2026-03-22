@@ -1,0 +1,32 @@
+export interface ApiResponse<T> {
+  success: boolean
+  data?: T
+  error?: string
+}
+
+export interface WatchlistItem {
+  ticker: string
+  company_name: string | null
+  exchange: string
+  sector: string | null
+  in_vn30: boolean
+  active: boolean
+}
+
+export interface AppSettings {
+  threshold_normal: number
+  threshold_magic: number
+  threshold_confirm_15m: number
+  breakout_vol_mult: number
+  breakout_price_pct: number
+  alert_days_before_cycle: number
+  watchlist_count: number
+  stream_status: 'connected' | 'disconnected'
+}
+
+export interface HealthStatus {
+  db: 'ok' | 'error'
+  redis: 'ok' | 'error'
+  stream: 'connected' | 'disconnected'
+  timestamp: string
+}
