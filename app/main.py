@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.config import settings
 from app.utils.logger import setup_logging
 
 setup_logging()
@@ -95,7 +96,8 @@ async def lifespan(app: FastAPI):
     alert_engine_m1.inject_deps(pool, redis, alert_queue)
     alert_engine_m3.inject_deps(pool, redis, alert_queue)
 
-    # 6. First-run backfill check
+    # 6. Warm in-memory baseline cache + first-run backfill check
+    await baseline_service.warm_cache()
     needs_backfill = await baseline_service.check_first_run_backfill()
     if needs_backfill:
         logger.info("No baselines found — will backfill when FiinQuantX connects")
@@ -128,9 +130,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_cors_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+if settings.FRONTEND_URL and settings.FRONTEND_URL not in _cors_origins:
+    _cors_origins.append(settings.FRONTEND_URL)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -173,7 +182,10 @@ async def health():
 
     try:
         r = redis_client.get_redis()
-        await r.ping()
+        if r is None:
+            redis_status = "disabled"
+        else:
+            await r.ping()
     except Exception:
         redis_status = "error"
 

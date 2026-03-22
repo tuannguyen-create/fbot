@@ -31,10 +31,12 @@ async def _job_cleanup_intraday():
     from app.database import get_pool
     pool = get_pool()
     async with pool.acquire() as conn:
-        deleted = await conn.fetchval(
-            "DELETE FROM intraday_1m WHERE bar_time < NOW() - INTERVAL '25 days' RETURNING COUNT(*)"
+        result = await conn.execute(
+            "DELETE FROM intraday_1m WHERE bar_time < NOW() - INTERVAL '25 days'"
         )
-    logger.info(f"Cleanup: removed old intraday rows (approx {deleted})")
+    # result = "DELETE N"
+    deleted = int(result.split()[-1]) if result else 0
+    logger.info(f"Cleanup: removed {deleted} old intraday rows")
 
 
 def setup_jobs():

@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://fbot:fbot_password@localhost:5432/fbot"
     DATABASE_URL_SYNC: str = "postgresql://fbot:fbot_password@localhost:5432/fbot"
 
-    # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
+    # Redis (optional — empty = disabled)
+    REDIS_URL: str = ""
 
     # Resend
     RESEND_API_KEY: str = ""
@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     LOG_LEVEL: str = "INFO"
     TIMEZONE: str = "Asia/Ho_Chi_Minh"
+    FRONTEND_URL: str = "http://localhost:3000"
 
     # Alert thresholds
     THRESHOLD_NORMAL: float = 2.0

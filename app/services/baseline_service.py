@@ -13,11 +13,29 @@ logger = logging.getLogger(__name__)
 _pool = None
 _redis = None
 
+# In-memory baseline cache: (ticker, slot) → {avg_5d, avg_20d, std_dev}
+# ~7,920 entries × ~100 bytes = ~0.8MB. Zero-latency lookups during trading hours.
+_mem_cache: dict[tuple[str, int], dict] = {}
+
 
 def inject_deps(pool, redis):
     global _pool, _redis
     _pool = pool
     _redis = redis
+
+
+async def warm_cache():
+    """Load all baselines from DB into memory at startup."""
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT ticker, slot, avg_5d, avg_20d, std_dev FROM volume_baselines"
+        )
+    _mem_cache.clear()
+    for row in rows:
+        entry = {k: row[k] for k in ("avg_5d", "avg_20d", "std_dev") if row[k] is not None}
+        if entry:
+            _mem_cache[(row["ticker"], row["slot"])] = entry
+    logger.info(f"Baseline cache warmed: {len(_mem_cache)} entries")
 
 
 async def rebuild_all():
@@ -82,33 +100,55 @@ async def rebuild_ticker(ticker: str):
             upsert_rows,
         )
 
-    # Update Redis cache
-    async with _redis.pipeline() as pipe:
-        for ticker_val, slot, avg_5d, avg_20d, std_dev_val, _, _ in upsert_rows:
-            key = f"baseline:{ticker_val}:{slot}"
-            mapping = {}
-            if avg_5d is not None:
-                mapping["avg_5d"] = str(avg_5d)
-            if avg_20d is not None:
-                mapping["avg_20d"] = str(avg_20d)
-            if std_dev_val is not None:
-                mapping["std_dev"] = str(std_dev_val)
-            if mapping:
-                await pipe.hset(key, mapping=mapping)
-                await pipe.expire(key, 86400)
-        await pipe.execute()
+    # Update in-memory cache
+    for ticker_val, slot, avg_5d, avg_20d, std_dev_val, _, _ in upsert_rows:
+        entry = {}
+        if avg_5d is not None:
+            entry["avg_5d"] = avg_5d
+        if avg_20d is not None:
+            entry["avg_20d"] = avg_20d
+        if std_dev_val is not None:
+            entry["std_dev"] = std_dev_val
+        if entry:
+            _mem_cache[(ticker_val, slot)] = entry
+
+    # Update Redis cache (skip if Redis not configured)
+    if _redis is not None:
+        async with _redis.pipeline() as pipe:
+            for ticker_val, slot, avg_5d, avg_20d, std_dev_val, _, _ in upsert_rows:
+                key = f"baseline:{ticker_val}:{slot}"
+                mapping = {}
+                if avg_5d is not None:
+                    mapping["avg_5d"] = str(avg_5d)
+                if avg_20d is not None:
+                    mapping["avg_20d"] = str(avg_20d)
+                if std_dev_val is not None:
+                    mapping["std_dev"] = str(std_dev_val)
+                if mapping:
+                    await pipe.hset(key, mapping=mapping)
+                    await pipe.expire(key, 86400)
+            await pipe.execute()
 
     logger.debug(f"Rebuilt baselines for {ticker}: {len(upsert_rows)} slots")
 
 
 async def get_baseline(ticker: str, slot: int) -> Optional[dict]:
-    """Get baseline for ticker+slot. Redis first, fallback to DB."""
-    key = f"baseline:{ticker}:{slot}"
-    cached = await _redis.hgetall(key)
+    """Get baseline for ticker+slot. Memory-first → Redis → DB fallback."""
+    # 1. In-memory (0ms, handles any update frequency)
+    cached = _mem_cache.get((ticker, slot))
     if cached and "avg_5d" in cached:
-        return {k: int(v) for k, v in cached.items()}
+        return cached
 
-    # DB fallback
+    # 2. Redis (if configured)
+    if _redis is not None:
+        key = f"baseline:{ticker}:{slot}"
+        r_cached = await _redis.hgetall(key)
+        if r_cached and "avg_5d" in r_cached:
+            result = {k: int(v) for k, v in r_cached.items()}
+            _mem_cache[(ticker, slot)] = result
+            return result
+
+    # 3. DB fallback
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT avg_5d, avg_20d, std_dev FROM volume_baselines WHERE ticker=$1 AND slot=$2",
@@ -117,11 +157,12 @@ async def get_baseline(ticker: str, slot: int) -> Optional[dict]:
         )
     if row:
         result = {k: v for k, v in row.items() if v is not None}
-        # Cache in Redis
         if result:
-            mapping = {k: str(v) for k, v in result.items()}
-            await _redis.hset(key, mapping=mapping)
-            await _redis.expire(key, 86400)
+            _mem_cache[(ticker, slot)] = result
+            if _redis is not None:
+                mapping = {k: str(v) for k, v in result.items()}
+                await _redis.hset(f"baseline:{ticker}:{slot}", mapping=mapping)
+                await _redis.expire(f"baseline:{ticker}:{slot}", 86400)
         return result
     return None
 

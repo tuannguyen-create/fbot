@@ -104,10 +104,14 @@ def upgrade() -> None:
             confirmed_at     TIMESTAMPTZ,
             ratio_15m        NUMERIC(6,2),
             email_sent       BOOLEAN DEFAULT FALSE,
-            cycle_event_id   BIGINT,
-            CONSTRAINT uq_alert_ticker_slot_day
-                UNIQUE (ticker, slot, (DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')))
+            cycle_event_id   BIGINT
         )
+    """)
+
+    # Expression-based unique index (cannot be inline UNIQUE constraint)
+    op.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_alert_ticker_slot_day
+        ON volume_alerts (ticker, slot, (DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')))
     """)
 
     op.execute("""

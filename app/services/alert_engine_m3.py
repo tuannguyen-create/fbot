@@ -24,6 +24,74 @@ def inject_deps(pool, redis, alert_queue=None):
         _alert_queue = alert_queue
 
 
+async def check_intraday_breakout(ticker: str, bar: dict):
+    """
+    Called by M1 when a volume spike fires. Checks if cumulative intraday
+    volume already crosses M3 breakout threshold — no need to wait until 15:05.
+    """
+    # Skip if active distributing cycle already exists
+    async with _pool.acquire() as conn:
+        active = await conn.fetchrow(
+            "SELECT id FROM cycle_events WHERE ticker=$1 AND phase='distributing'",
+            ticker,
+        )
+    if active:
+        return
+
+    # Already created a cycle today?
+    today = date.today()
+    async with _pool.acquire() as conn:
+        exists = await conn.fetchval(
+            "SELECT id FROM cycle_events WHERE ticker=$1 AND breakout_date=$2",
+            ticker, today,
+        )
+    if exists:
+        return
+
+    # Get MA20 daily volume + yesterday close from daily_ohlcv
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT date, close, volume FROM daily_ohlcv
+            WHERE ticker=$1 ORDER BY date DESC LIMIT 21
+            """,
+            ticker,
+        )
+    if len(rows) < 3:
+        return
+
+    volumes = [r["volume"] for r in rows if r["volume"]]
+    ma20 = mean(volumes[:20]) if len(volumes) >= 20 else mean(volumes)
+    yesterday_close = rows[0]["close"]
+    if not yesterday_close or yesterday_close <= 0 or not ma20:
+        return
+
+    # Get today's cumulative intraday volume
+    async with _pool.acquire() as conn:
+        cum_vol = await conn.fetchval(
+            """
+            SELECT COALESCE(SUM(volume), 0) FROM intraday_1m
+            WHERE ticker=$1
+              AND (bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')::date = $2
+            """,
+            ticker, today,
+        )
+    if not cum_vol:
+        return
+
+    vol_ratio = cum_vol / ma20
+    current_price = bar.get("close", 0) or 0
+    price_chg = (current_price - yesterday_close) / yesterday_close
+
+    if vol_ratio >= settings.BREAKOUT_VOL_MULT and price_chg >= settings.BREAKOUT_PRICE_PCT:
+        logger.info(
+            f"M3 Intraday breakout: {ticker} cum_vol={vol_ratio:.1f}x MA20 "
+            f"price_chg={price_chg:.1%}"
+        )
+        fake_row = {"date": today, "volume": cum_vol, "close": current_price}
+        await _create_cycle(ticker, fake_row, ma20)
+
+
 async def run_daily():
     """
     APScheduler calls this at 15:05 ICT (after 14:30 market close).

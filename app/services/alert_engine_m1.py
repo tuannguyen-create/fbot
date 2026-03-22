@@ -54,9 +54,18 @@ async def process(bar: dict):
             return
 
         volume = bar["volume"]
-        ratio = volume / avg_5d
         in_magic = is_magic_window(bar_time_ict.time())
         threshold = settings.THRESHOLD_MAGIC if in_magic else settings.THRESHOLD_NORMAL
+
+        # Rate projection: if FiinQuantX sends mid-minute running updates
+        # (bar_time.second > 0), project current volume to full minute.
+        # Allows early detection at ~10-20s instead of waiting for bar close.
+        elapsed_seconds = bar_time_ict.second
+        if elapsed_seconds >= 10:
+            projected_volume = int(volume * (60 / elapsed_seconds))
+            ratio = projected_volume / avg_5d
+        else:
+            ratio = volume / avg_5d
 
         if ratio >= threshold:
             await _fire_alert(ticker, bar, slot, ratio, baseline, in_magic)
@@ -76,9 +85,9 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
     foreign_net = bar.get("fn")
     avg_5d = baseline.get("avg_5d")
 
-    # Redis throttle check (30 min)
+    # Redis throttle check (30 min) — skip if Redis not configured
     throttle_key = f"alert_throttle:{ticker}:{slot}"
-    if await _redis.exists(throttle_key):
+    if _redis is not None and await _redis.exists(throttle_key):
         return
 
     try:
@@ -107,8 +116,9 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
             # Duplicate
             return
 
-        # Set Redis throttle
-        await _redis.setex(throttle_key, 1800, "1")
+        # Set Redis throttle (skip if Redis not configured)
+        if _redis is not None:
+            await _redis.setex(throttle_key, 1800, "1")
 
         # Queue for 15-min confirmation
         _pending_confirms[ticker] = {
@@ -138,6 +148,10 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
 
         # Email notification (async, non-blocking)
         asyncio.create_task(notification.send_volume_alert_email(alert_id))
+
+        # Trigger M3 intraday breakout check (volume spike may = breakout day)
+        from app.services import alert_engine_m3
+        asyncio.create_task(alert_engine_m3.check_intraday_breakout(ticker, bar))
 
     except Exception as e:
         logger.error(f"M1 fire_alert error for {ticker}: {e}", exc_info=True)
