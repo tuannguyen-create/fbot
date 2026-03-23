@@ -197,6 +197,17 @@ async def _check_confirmations(ticker: str, bar: dict, current_slot: int):
                 alert_id,
             )
         logger.info(f"M1 Confirm: {ticker} alert_id={alert_id} status={status} ratio_15m={ratio_15m:.2f}")
+
+        # SSE push — update clients with new status
+        if _alert_queue is not None:
+            await _alert_queue.put({
+                "type": "alert_status_update",
+                "data": {
+                    "id": alert_id,
+                    "status": status,
+                    "ratio_15m": round(ratio_15m, 2),
+                },
+            })
     except Exception as e:
         logger.error(f"M1 confirm error: {e}")
 

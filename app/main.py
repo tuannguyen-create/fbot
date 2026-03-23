@@ -8,6 +8,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from datetime import date as _date
+
 from app.config import settings
 from app.utils.logger import setup_logging
 
@@ -61,7 +63,7 @@ async def lifespan(app: FastAPI):
     from app import database, redis_client
     from app.services import baseline_service, notification, stream_ingester
     from app.services import alert_engine_m1, alert_engine_m3
-    from app.services import market_calendar
+    from app.services import market_calendar, daily_ohlcv_service
     from app.scheduler import setup_jobs
     from app.api.stream import alert_queue, broadcaster
 
@@ -87,7 +89,9 @@ async def lifespan(app: FastAPI):
 
     # 4. Seed data
     await _seed_watchlist(pool)
-    await market_calendar.seed_market_calendar(pool, 2026)
+    _today = _date.today()
+    await market_calendar.seed_market_calendar(pool, _today.year)
+    await market_calendar.seed_market_calendar(pool, _today.year + 1)
 
     # 5. Inject deps
     baseline_service.inject_deps(pool, redis)
@@ -95,12 +99,17 @@ async def lifespan(app: FastAPI):
     stream_ingester.inject_deps(pool, redis, alert_queue)
     alert_engine_m1.inject_deps(pool, redis, alert_queue)
     alert_engine_m3.inject_deps(pool, redis, alert_queue)
+    daily_ohlcv_service.inject_deps(pool)
 
-    # 6. Warm in-memory baseline cache + first-run backfill check
+    # 6. Warm in-memory baseline cache + first-run backfill
     await baseline_service.warm_cache()
     needs_backfill = await baseline_service.check_first_run_backfill()
     if needs_backfill:
-        logger.info("No baselines found — will backfill when FiinQuantX connects")
+        logger.info("No baselines found — triggering rebuild")
+        asyncio.create_task(baseline_service.rebuild_all(force=True))
+
+    # Backfill daily OHLCV from FiinQuantX historical data at startup
+    asyncio.create_task(daily_ohlcv_service.backfill_historical())
 
     # 7. APScheduler
     setup_jobs()

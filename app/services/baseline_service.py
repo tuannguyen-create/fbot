@@ -38,9 +38,9 @@ async def warm_cache():
     logger.info(f"Baseline cache warmed: {len(_mem_cache)} entries")
 
 
-async def rebuild_all():
+async def rebuild_all(force: bool = False):
     """Rebuild baselines for all tickers. Called nightly by APScheduler."""
-    if not is_trading_day(date.today()):
+    if not force and not is_trading_day(date.today()):
         logger.info("Skipping baseline rebuild (non-trading day)")
         return
     logger.info(f"Starting baseline rebuild for {len(settings.WATCHLIST)} tickers")

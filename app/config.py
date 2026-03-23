@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://fbot:fbot_password@localhost:5432/fbot"
     DATABASE_URL_SYNC: str = "postgresql://fbot:fbot_password@localhost:5432/fbot"
+    DATABASE_SSL: bool = True  # Set False for local dev without TLS
 
     # Redis (optional — empty = disabled)
     REDIS_URL: str = ""

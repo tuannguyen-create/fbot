@@ -75,7 +75,7 @@ export default function CycleDetailPage({ params }: Props) {
         </div>
 
         <div className="mt-4 pt-4 border-t border-gray-100 space-y-1 text-sm text-gray-500">
-          <p>Breakout email: ✅ Đã gửi</p>
+          <p>Breakout email: {cycle.breakout_email_sent ? '✅ Đã gửi' : '⏳ Chờ'}</p>
           <p>10-ngày warning: {cycle.alert_sent_10d ? '✅ Đã gửi' : '⏳ Chờ'}</p>
           <p>Bottom alert: {cycle.alert_sent_bottom ? '✅ Đã gửi' : '⏳ Chờ'}</p>
         </div>

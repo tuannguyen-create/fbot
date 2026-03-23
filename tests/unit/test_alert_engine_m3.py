@@ -56,7 +56,8 @@ class TestBreakoutDetection:
             mock_notif.send_cycle_breakout_email = AsyncMock()
             await alert_engine_m3._analyze_ticker("HPG")
 
-        conn.fetchval.assert_called_once()  # INSERT into cycle_events
+        # fetchval called twice: M1 alert lookup + INSERT RETURNING id
+        assert conn.fetchval.call_count == 2
 
     @pytest.mark.asyncio
     async def test_no_breakout_vol_insufficient(self, mock_pool):
@@ -131,7 +132,7 @@ class TestCycleUpdate:
 
     @pytest.mark.asyncio
     async def test_bottom_detected_low_volume(self, mock_pool):
-        """3 consecutive days vol < 50% MA20 + days_remaining<=5 → bottom alert"""
+        """3 consecutive days vol < 50% MA20 + days_remaining<=0 → bottom alert"""
         pool, conn = mock_pool
         alert_engine_m3.inject_deps(pool, MagicMock(), None)
 
@@ -141,7 +142,7 @@ class TestCycleUpdate:
             "breakout_date": date(2026, 2, 10),
             "phase": "distributing",
             "estimated_dist_days": 20,
-            "days_remaining": 2,
+            "days_remaining": 0,
             "alert_sent_10d": True,
             "alert_sent_bottom": False,
         }
@@ -153,7 +154,7 @@ class TestCycleUpdate:
         rows[-3]["volume"] = 420_000
 
         with patch("app.services.alert_engine_m3.notification") as mock_notif, \
-             patch("app.services.alert_engine_m3.count_trading_days_between", return_value=18):
+             patch("app.services.alert_engine_m3.count_trading_days_between", return_value=20):
             mock_notif.send_cycle_bottom_email = AsyncMock()
             conn.execute = AsyncMock()
             await alert_engine_m3._update_cycle("PDR", cycle, rows, ma20)

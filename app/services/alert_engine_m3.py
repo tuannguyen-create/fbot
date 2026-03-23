@@ -152,7 +152,19 @@ async def _analyze_ticker(ticker: str):
                 ticker,
             )
         if not active:
-            await _create_cycle(ticker, today_row, ma20)
+            # Link to today's highest-ratio M1 alert if one exists
+            async with _pool.acquire() as conn:
+                today_alert_id = await conn.fetchval(
+                    """
+                    SELECT id FROM volume_alerts
+                    WHERE ticker=$1
+                      AND DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh') = $2
+                    ORDER BY ratio_5d DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    ticker, today_row["date"],
+                )
+            await _create_cycle(ticker, today_row, ma20, alert_id=today_alert_id)
             return
 
     # --- Update existing cycles ---
@@ -235,7 +247,7 @@ async def _update_cycle(ticker: str, cycle: dict, recent_rows: list, ma20: float
     last_vols = [r["volume"] for r in recent_rows[-3:] if r["volume"]]
     all_low = len(last_vols) == 3 and all(v < ma20 * 0.5 for v in last_vols)
 
-    if all_low and remaining <= 5 and not cycle["alert_sent_bottom"]:
+    if all_low and remaining <= 0 and not cycle["alert_sent_bottom"]:
         async with _pool.acquire() as conn:
             await conn.execute(
                 """
