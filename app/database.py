@@ -1,4 +1,5 @@
 import asyncpg
+import re
 from app.config import settings
 import logging
 
@@ -7,13 +8,21 @@ logger = logging.getLogger(__name__)
 _pool: asyncpg.Pool | None = None
 
 
+def _clean_dsn(url: str) -> str:
+    """Strip sqlalchemy prefix and sslmode param (passed explicitly to asyncpg)."""
+    dsn = url.replace("postgresql+asyncpg://", "postgresql://")
+    dsn = re.sub(r'[?&]sslmode=[^&]*', '', dsn).rstrip('?&')
+    return dsn
+
+
 async def init_pool() -> asyncpg.Pool:
     global _pool
     _pool = await asyncpg.create_pool(
-        dsn=settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://"),
+        dsn=_clean_dsn(settings.DATABASE_URL),
         min_size=2,
         max_size=10,
         command_timeout=30,
+        ssl='require',
     )
     logger.info("PostgreSQL pool initialized")
     return _pool
