@@ -21,9 +21,10 @@ _event = None
 _client = None
 _watchdog_task: Optional[asyncio.Task] = None
 
-BACKOFF_BASE = 5
-BACKOFF_MAX = 300  # 5 min max between retries
-_STALE_MINUTES = 10  # Watchdog threshold: no data for N min during trading hours
+BACKOFF_BASE = 60           # Give server 60s to clean up stale sessions before retry
+BACKOFF_MAX = 300           # 5 min max between retries
+_STALE_MINUTES = 10         # Watchdog threshold: no data for N min during trading hours
+_PROACTIVE_RESTART_SECS = 55 * 60  # Restart before 1-hour FiinQuantX JWT expires
 
 
 def inject_deps(pool, redis, alert_queue: asyncio.Queue):
@@ -225,6 +226,14 @@ async def _watchdog():
             _close_event()
 
 
+async def _proactive_restart_timer():
+    """Close stream before 1-hour JWT expires to prevent mass-reconnect cascade."""
+    await asyncio.sleep(_PROACTIVE_RESTART_SECS)
+    if _stream_connected:
+        logger.info("Proactive restart: closing stream before JWT expires (55 min timer)")
+        _close_event()
+
+
 async def start():
     """Start stream with infinite retry. Non-blocking (runs in thread executor)."""
     global _stream_connected, _loop, _watchdog_task
@@ -236,6 +245,7 @@ async def start():
     while True:
         attempt += 1
         run_start = _loop.time()
+        refresh_task = asyncio.create_task(_proactive_restart_timer())
         try:
             logger.info(f"FiinQuantX stream starting (attempt {attempt})")
             await _loop.run_in_executor(None, _stream_blocking)
@@ -243,24 +253,35 @@ async def start():
         except ImportError:
             logger.warning("FiinQuantX not installed — stream disabled (dev mode)")
             _close_event()
+            refresh_task.cancel()
             _watchdog_task.cancel()
             return
         except asyncio.CancelledError:
             logger.info("Stream task cancelled")
             _close_event()
+            refresh_task.cancel()
             _watchdog_task.cancel()
             raise
         except Exception as e:
             logger.error(f"Stream error (attempt {attempt}): {e}", exc_info=True)
         finally:
             _close_event()
+            refresh_task.cancel()
 
-        # Reset backoff after a successful long-running session (> 5 min)
-        if _loop.time() - run_start > 300:
+        elapsed = _loop.time() - run_start
+        # Planned restart (proactive JWT refresh): short wait, no backoff penalty
+        if elapsed > _PROACTIVE_RESTART_SECS - 60:
             attempt = 0
+            wait = 10
+        # Unplanned crash but session ran > 5 min: quick reconnect, reset penalty
+        elif elapsed > 300:
+            attempt = 0
+            wait = BACKOFF_BASE
+        # Fast crash (likely stale server sessions): exponential backoff
+        else:
+            wait = min(BACKOFF_BASE * (2 ** min(attempt - 1, 6)), BACKOFF_MAX)
 
-        wait = min(BACKOFF_BASE * (2 ** min(attempt - 1, 6)), BACKOFF_MAX)
-        logger.info(f"Reconnecting in {wait}s...")
+        logger.info(f"Reconnecting in {wait}s (session ran {elapsed:.0f}s)...")
         await asyncio.sleep(wait)
 
 
