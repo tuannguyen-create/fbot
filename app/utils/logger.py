@@ -16,3 +16,4 @@ def setup_logging():
     # Quiet noisy libs
     logging.getLogger("asyncpg").setLevel(logging.WARNING)
     logging.getLogger("apscheduler").setLevel(logging.INFO)
+    logging.getLogger("signalrcore").setLevel(logging.WARNING)
