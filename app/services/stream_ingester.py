@@ -269,10 +269,10 @@ async def start():
             refresh_task.cancel()
 
         elapsed = _loop.time() - run_start
-        # Planned restart (proactive JWT refresh): short wait, no backoff penalty
+        # Planned restart (proactive JWT refresh): wait for server to clean up stale sessions
         if elapsed > _PROACTIVE_RESTART_SECS - 60:
             attempt = 0
-            wait = 10
+            wait = BACKOFF_BASE
         # Unplanned crash but session ran > 5 min: quick reconnect, reset penalty
         elif elapsed > 300:
             attempt = 0
