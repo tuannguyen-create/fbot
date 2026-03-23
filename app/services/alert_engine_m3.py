@@ -24,7 +24,7 @@ def inject_deps(pool, redis, alert_queue=None):
         _alert_queue = alert_queue
 
 
-async def check_intraday_breakout(ticker: str, bar: dict):
+async def check_intraday_breakout(ticker: str, bar: dict, alert_id: Optional[int] = None):
     """
     Called by M1 when a volume spike fires. Checks if cumulative intraday
     volume already crosses M3 breakout threshold — no need to wait until 15:05.
@@ -89,7 +89,7 @@ async def check_intraday_breakout(ticker: str, bar: dict):
             f"price_chg={price_chg:.1%}"
         )
         fake_row = {"date": today, "volume": cum_vol, "close": current_price}
-        await _create_cycle(ticker, fake_row, ma20)
+        await _create_cycle(ticker, fake_row, ma20, alert_id=alert_id)
 
 
 async def run_daily():
@@ -165,7 +165,7 @@ async def _analyze_ticker(ticker: str):
         await _update_cycle(ticker, dict(cycle), rows, ma20)
 
 
-async def _create_cycle(ticker: str, today_row, ma20: float):
+async def _create_cycle(ticker: str, today_row, ma20: float, alert_id: Optional[int] = None):
     est_dist_days = 20
     breakout_date = today_row["date"]
     predicted_bottom = add_trading_days(breakout_date, est_dist_days)
@@ -189,6 +189,14 @@ async def _create_cycle(ticker: str, today_row, ma20: float):
         )
 
     logger.info(f"M3 Cycle created: {ticker} breakout={breakout_date} id={cycle_id}")
+
+    # Link volume alert → cycle
+    if alert_id is not None:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE volume_alerts SET cycle_event_id=$1 WHERE id=$2",
+                cycle_id, alert_id,
+            )
 
     # SSE push
     if _alert_queue is not None:

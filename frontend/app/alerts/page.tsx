@@ -40,7 +40,7 @@ function AlertsContent() {
     const p = new URLSearchParams(params.toString())
     if (value) p.set(key, value)
     else p.delete(key)
-    p.delete('offset')
+    if (key !== 'offset') p.delete('offset')
     router.push(`/alerts?${p.toString()}`)
   }
 

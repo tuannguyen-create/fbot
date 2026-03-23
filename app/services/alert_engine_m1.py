@@ -92,7 +92,7 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
 
     try:
         async with _pool.acquire() as conn:
-            alert_id = await conn.fetchval(
+            row = await conn.fetchrow(
                 """
                 INSERT INTO volume_alerts
                     (ticker, slot, volume, baseline_5d, ratio_5d, bu_pct, foreign_net,
@@ -100,7 +100,7 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'fired')
                 ON CONFLICT (ticker, slot, (DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')))
                 DO NOTHING
-                RETURNING id
+                RETURNING id, fired_at
                 """,
                 ticker,
                 slot,
@@ -112,9 +112,12 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
                 in_magic,
             )
 
-        if alert_id is None:
+        if row is None:
             # Duplicate
             return
+
+        alert_id = row["id"]
+        fired_at = row["fired_at"]
 
         # Set Redis throttle (skip if Redis not configured)
         if _redis is not None:
@@ -143,6 +146,7 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
                     "bu_pct": round(bu_pct, 1) if bu_pct is not None else None,
                     "in_magic_window": in_magic,
                     "status": "fired",
+                    "fired_at": fired_at.isoformat() if fired_at else None,
                 },
             })
 
@@ -151,7 +155,7 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
 
         # Trigger M3 intraday breakout check (volume spike may = breakout day)
         from app.services import alert_engine_m3
-        asyncio.create_task(alert_engine_m3.check_intraday_breakout(ticker, bar))
+        asyncio.create_task(alert_engine_m3.check_intraday_breakout(ticker, bar, alert_id))
 
     except Exception as e:
         logger.error(f"M1 fire_alert error for {ticker}: {e}", exc_info=True)

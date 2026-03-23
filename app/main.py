@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
     from app.services import alert_engine_m1, alert_engine_m3
     from app.services import market_calendar
     from app.scheduler import setup_jobs
-    from app.api.stream import alert_queue
+    from app.api.stream import alert_queue, broadcaster
 
     # 1. DB
     try:
@@ -105,7 +105,8 @@ async def lifespan(app: FastAPI):
     # 7. APScheduler
     setup_jobs()
 
-    # 8. Start FiinQuantX stream (background task)
+    # 8. Start SSE broadcaster + FiinQuantX stream (background tasks)
+    broadcaster_task = asyncio.create_task(broadcaster())
     stream_task = asyncio.create_task(stream_ingester.start())
 
     logger.info("fbot backend started ✓")
@@ -113,6 +114,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # --- SHUTDOWN ---
+    broadcaster_task.cancel()
     stream_task.cancel()
     await stream_ingester.stop()
     from app.scheduler import scheduler
