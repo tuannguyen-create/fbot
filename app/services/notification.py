@@ -197,13 +197,17 @@ async def _send_email(subject: str, html: str, alert_id: int = None, cycle_id: i
         logger.warning(f"Email skipped (Resend not configured): {subject}")
         return None
     try:
+        import asyncio
         params = {
             "from": settings.RESEND_FROM,
             "to": settings.RESEND_RECIPIENTS,
             "subject": subject,
             "html": html,
         }
-        result = _resend.Emails.send(params)
+        # Run sync SDK call in thread executor to avoid blocking the event loop
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: _resend.Emails.send(params)
+        )
         message_id = result.get("id")
 
         # Log to DB

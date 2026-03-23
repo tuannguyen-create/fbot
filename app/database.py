@@ -17,12 +17,13 @@ def _clean_dsn(url: str) -> str:
 
 async def init_pool() -> asyncpg.Pool:
     global _pool
+    ssl = 'require' if settings.DATABASE_SSL else False
     _pool = await asyncpg.create_pool(
         dsn=_clean_dsn(settings.DATABASE_URL),
         min_size=2,
         max_size=10,
         command_timeout=30,
-        ssl='require',
+        ssl=ssl,
     )
     logger.info("PostgreSQL pool initialized")
     return _pool

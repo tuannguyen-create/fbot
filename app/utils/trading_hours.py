@@ -32,8 +32,13 @@ NON_TRADING_DAYS_2026: set[date] = {
 
 
 def is_trading_day(d: date) -> bool:
-    """Return True if d is a trading day (weekday + not holiday)."""
-    return d.weekday() < 5 and d not in NON_TRADING_DAYS_2026
+    """Return True if d is a trading day (weekday + not holiday).
+    Holiday data is only available for 2026; other years use weekday-only check."""
+    if d.weekday() >= 5:
+        return False
+    if d.year == 2026:
+        return d not in NON_TRADING_DAYS_2026
+    return True
 
 
 def get_slot(t: time) -> Optional[int]:

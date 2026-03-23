@@ -14,6 +14,7 @@ export interface CycleDetail extends CycleSummary {
   breakout_price: number | null
   alert_sent_10d: boolean
   alert_sent_bottom: boolean
+  breakout_email_sent: boolean
   created_at: string
   updated_at: string
 }

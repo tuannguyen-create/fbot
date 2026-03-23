@@ -24,6 +24,16 @@ def injected_m1(mock_pool, mock_redis):
     return pool, conn, mock_redis, queue
 
 
+def _mock_alert_row(alert_id: int):
+    """Return a mock asyncpg-like record for alert INSERT RETURNING id, fired_at."""
+    row = {"id": alert_id, "fired_at": None}
+    # Support both row["key"] and row.key access patterns
+    mock = MagicMock()
+    mock.__getitem__ = lambda self, key: row[key]
+    mock.__bool__ = lambda self: True
+    return mock
+
+
 class TestM1Process:
     @pytest.mark.asyncio
     async def test_no_alert_below_threshold(self, injected_m1, sample_bar):
@@ -35,7 +45,7 @@ class TestM1Process:
             mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
             await alert_engine_m1.process(bar)
 
-        assert conn.fetchval.call_count == 0
+        assert conn.fetchrow.call_count == 0
 
     @pytest.mark.asyncio
     async def test_fires_alert_normal_threshold(self, injected_m1, sample_bar):
@@ -44,16 +54,17 @@ class TestM1Process:
         bar = {**sample_bar, "volume": 2_100_000,
                "bar_time": datetime(2026, 3, 18, 2, 45, 0, tzinfo=timezone.utc)}  # 9:45 ICT — normal
 
-        conn.fetchval = AsyncMock(return_value=42)  # alert_id
+        conn.fetchrow = AsyncMock(return_value=_mock_alert_row(42))
         redis.exists = AsyncMock(return_value=0)
 
         with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
-             patch("app.services.alert_engine_m1.notification") as mock_notif:
+             patch("app.services.alert_engine_m1.notification") as mock_notif, \
+             patch("app.services.alert_engine_m3.check_intraday_breakout", new=AsyncMock()):
             mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
             mock_notif.send_volume_alert_email = AsyncMock()
             await alert_engine_m1.process(bar)
 
-        conn.fetchval.assert_called_once()
+        conn.fetchrow.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_fires_at_magic_threshold(self, injected_m1, sample_bar):
@@ -61,16 +72,17 @@ class TestM1Process:
         pool, conn, redis, queue = injected_m1
         # 9:15 ICT = magic window
         bar = {**sample_bar, "volume": 1_600_000}
-        conn.fetchval = AsyncMock(return_value=43)
+        conn.fetchrow = AsyncMock(return_value=_mock_alert_row(43))
         redis.exists = AsyncMock(return_value=0)
 
         with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
-             patch("app.services.alert_engine_m1.notification") as mock_notif:
+             patch("app.services.alert_engine_m1.notification") as mock_notif, \
+             patch("app.services.alert_engine_m3.check_intraday_breakout", new=AsyncMock()):
             mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
             mock_notif.send_volume_alert_email = AsyncMock()
             await alert_engine_m1.process(bar)
 
-        conn.fetchval.assert_called_once()
+        conn.fetchrow.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_no_alert_outside_trading_hours(self, injected_m1):
@@ -86,7 +98,7 @@ class TestM1Process:
             mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 100_000})
             await alert_engine_m1.process(bar)
 
-        conn.fetchval.assert_not_called()
+        conn.fetchrow.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_baseline_skips(self, injected_m1, sample_bar):
@@ -96,7 +108,7 @@ class TestM1Process:
             mock_bs.get_baseline = AsyncMock(return_value=None)
             await alert_engine_m1.process(sample_bar)
 
-        conn.fetchval.assert_not_called()
+        conn.fetchrow.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_redis_throttle_prevents_double_fire(self, injected_m1, sample_bar):
@@ -109,7 +121,7 @@ class TestM1Process:
             bar = {**sample_bar, "volume": 5_000_000}
             await alert_engine_m1.process(bar)
 
-        conn.fetchval.assert_not_called()
+        conn.fetchrow.assert_not_called()
 
 
 class TestBuPctCalculation:
@@ -119,7 +131,7 @@ class TestBuPctCalculation:
         pool, conn, redis, queue = injected_m1
         bar = {**sample_bar, "volume": 2_100_000, "bu": 800_000, "sd": 200_000,
                "bar_time": datetime(2026, 3, 18, 2, 45, 0, tzinfo=timezone.utc)}
-        conn.fetchval = AsyncMock(return_value=44)
+        conn.fetchrow = AsyncMock(return_value=_mock_alert_row(44))
         redis.exists = AsyncMock(return_value=0)
 
         captured_args = []
@@ -130,15 +142,16 @@ class TestBuPctCalculation:
         conn.execute = AsyncMock(side_effect=fake_execute)
 
         with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
-             patch("app.services.alert_engine_m1.notification") as mock_notif:
+             patch("app.services.alert_engine_m1.notification") as mock_notif, \
+             patch("app.services.alert_engine_m3.check_intraday_breakout", new=AsyncMock()):
             mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
             mock_notif.send_volume_alert_email = AsyncMock()
             await alert_engine_m1.process(bar)
 
-        # Verify fetchval was called with correct bu_pct = 80.0
-        call_args = conn.fetchval.call_args
-        # bu_pct is the 6th positional arg in the INSERT
-        bu_pct_passed = call_args[0][6]  # index 6 = bu_pct param
+        # Verify fetchrow was called with correct bu_pct = 80.0
+        call_args = conn.fetchrow.call_args
+        # bu_pct is the 6th positional arg in the INSERT (0=sql, 1=ticker, 2=slot, 3=vol, 4=avg5d, 5=ratio, 6=bu_pct)
+        bu_pct_passed = call_args[0][6]
         assert abs(bu_pct_passed - 80.0) < 0.01
 
     @pytest.mark.asyncio
@@ -147,16 +160,17 @@ class TestBuPctCalculation:
         pool, conn, redis, queue = injected_m1
         bar = {**sample_bar, "volume": 2_100_000, "bu": 0, "sd": 0,
                "bar_time": datetime(2026, 3, 18, 2, 45, 0, tzinfo=timezone.utc)}
-        conn.fetchval = AsyncMock(return_value=45)
+        conn.fetchrow = AsyncMock(return_value=_mock_alert_row(45))
         redis.exists = AsyncMock(return_value=0)
 
         with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
-             patch("app.services.alert_engine_m1.notification") as mock_notif:
+             patch("app.services.alert_engine_m1.notification") as mock_notif, \
+             patch("app.services.alert_engine_m3.check_intraday_breakout", new=AsyncMock()):
             mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
             mock_notif.send_volume_alert_email = AsyncMock()
             await alert_engine_m1.process(bar)  # should not raise
 
-        call_args = conn.fetchval.call_args
+        call_args = conn.fetchrow.call_args
         bu_pct_passed = call_args[0][6]
         assert bu_pct_passed is None
 
@@ -168,11 +182,12 @@ class TestConfirmation:
         pool, conn, redis, queue = injected_m1
         bar = {**sample_bar, "volume": 2_500_000,
                "bar_time": datetime(2026, 3, 18, 2, 45, 0, tzinfo=timezone.utc)}
-        conn.fetchval = AsyncMock(return_value=50)
+        conn.fetchrow = AsyncMock(return_value=_mock_alert_row(50))
         redis.exists = AsyncMock(return_value=0)
 
         with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
-             patch("app.services.alert_engine_m1.notification") as mock_notif:
+             patch("app.services.alert_engine_m1.notification") as mock_notif, \
+             patch("app.services.alert_engine_m3.check_intraday_breakout", new=AsyncMock()):
             mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
             mock_notif.send_volume_alert_email = AsyncMock()
             await alert_engine_m1.process(bar)

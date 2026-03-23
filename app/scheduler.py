@@ -5,7 +5,7 @@ from datetime import date
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.utils.trading_hours import is_trading_day
-from app.services import baseline_service, alert_engine_m3, market_calendar
+from app.services import baseline_service, alert_engine_m3, market_calendar, daily_ohlcv_service
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,12 @@ async def _job_m3_daily():
         logger.info("Scheduler: skip M3 daily (non-trading day)")
         return
     await alert_engine_m3.run_daily()
+
+
+async def _job_daily_ohlcv_aggregate():
+    if not is_trading_day(date.today()):
+        return
+    await daily_ohlcv_service.aggregate_today()
 
 
 async def _job_cleanup_intraday():
@@ -58,6 +64,17 @@ def setup_jobs():
         hour=15,
         minute=5,
         id="m3_daily",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    # Aggregate intraday_1m → daily_ohlcv at 15:10 ICT (after M3 runs)
+    scheduler.add_job(
+        _job_daily_ohlcv_aggregate,
+        trigger="cron",
+        hour=15,
+        minute=10,
+        id="daily_ohlcv_aggregate",
         replace_existing=True,
         misfire_grace_time=3600,
     )
