@@ -14,7 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir \
         --extra-index-url https://fiinquant.github.io/fiinquantx/simple \
         fiinquantx && \
-    pip install --no-cache-dir matplotlib
+    pip install --no-cache-dir matplotlib && \
+    pip install --no-cache-dir --force-reinstall 'signalrcore==0.9.2'
 
 COPY . .
 
