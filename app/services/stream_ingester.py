@@ -1,7 +1,7 @@
 """FiinQuantX WebSocket stream ingester."""
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time as dtime
 from typing import Optional
 
 from app.config import settings
@@ -19,10 +19,11 @@ _stream_connected = False
 _last_bar_time: Optional[datetime] = None
 _event = None
 _client = None
+_watchdog_task: Optional[asyncio.Task] = None
 
-MAX_RETRIES = 5
 BACKOFF_BASE = 5
-BACKOFF_MAX = 120
+BACKOFF_MAX = 300  # 5 min max between retries
+_STALE_MINUTES = 10  # Watchdog threshold: no data for N min during trading hours
 
 
 def inject_deps(pool, redis, alert_queue: asyncio.Queue):
@@ -183,36 +184,90 @@ def _stream_blocking():
     logger.info("FiinQuantX stream ended")
 
 
-async def start():
-    """Start stream with retry logic. Non-blocking (runs in thread executor)."""
-    global _stream_connected, _loop
-    _loop = asyncio.get_running_loop()  # Capture while in async context
-
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            logger.info(f"Starting FiinQuantX stream (attempt {attempt}/{MAX_RETRIES})")
-            await _loop.run_in_executor(None, _stream_blocking)
-        except ImportError:
-            logger.warning("FiinQuantX not installed — stream disabled (dev mode)")
-            _stream_connected = False
-            return
-        except Exception as e:
-            _stream_connected = False
-            wait = min(BACKOFF_BASE * (2 ** (attempt - 1)), BACKOFF_MAX)
-            logger.error(f"Stream error (attempt {attempt}): {e}. Retry in {wait}s")
-            if attempt < MAX_RETRIES:
-                await asyncio.sleep(wait)
-            else:
-                logger.critical("FiinQuantX stream failed after max retries")
-                return
-
-
-async def stop():
-    global _stream_connected, _event
+def _close_event():
+    """Close current stream event and clear references to prevent zombie threads."""
+    global _event, _client, _stream_connected
     _stream_connected = False
     if _event:
         try:
             _event.close()
         except Exception:
             pass
+        _event = None
+    _client = None
+
+
+async def _watchdog():
+    """Restart stream if no data received during trading hours for too long."""
+    from app.utils.trading_hours import is_trading_day
+    from app.utils.timezone import to_ict
+
+    while True:
+        await asyncio.sleep(60)
+
+        if not _stream_connected or _last_bar_time is None:
+            continue
+
+        now_utc = datetime.now(timezone.utc)
+        now_ict = to_ict(now_utc)
+
+        # Only check during trading hours 9:00–15:10 ICT
+        if not (dtime(9, 0) <= now_ict.time() <= dtime(15, 10)):
+            continue
+        if not is_trading_day(now_ict.date()):
+            continue
+
+        age_min = (now_utc - _last_bar_time).total_seconds() / 60
+        if age_min > _STALE_MINUTES:
+            logger.warning(
+                f"Stream stale: no data for {age_min:.1f} min — forcing reconnect"
+            )
+            _close_event()
+
+
+async def start():
+    """Start stream with infinite retry. Non-blocking (runs in thread executor)."""
+    global _stream_connected, _loop, _watchdog_task
+    _loop = asyncio.get_running_loop()
+
+    _watchdog_task = asyncio.create_task(_watchdog())
+
+    attempt = 0
+    while True:
+        attempt += 1
+        run_start = _loop.time()
+        try:
+            logger.info(f"FiinQuantX stream starting (attempt {attempt})")
+            await _loop.run_in_executor(None, _stream_blocking)
+            logger.info("FiinQuantX stream disconnected")
+        except ImportError:
+            logger.warning("FiinQuantX not installed — stream disabled (dev mode)")
+            _close_event()
+            _watchdog_task.cancel()
+            return
+        except asyncio.CancelledError:
+            logger.info("Stream task cancelled")
+            _close_event()
+            _watchdog_task.cancel()
+            raise
+        except Exception as e:
+            logger.error(f"Stream error (attempt {attempt}): {e}", exc_info=True)
+        finally:
+            _close_event()
+
+        # Reset backoff after a successful long-running session (> 5 min)
+        if _loop.time() - run_start > 300:
+            attempt = 0
+
+        wait = min(BACKOFF_BASE * (2 ** min(attempt - 1, 6)), BACKOFF_MAX)
+        logger.info(f"Reconnecting in {wait}s...")
+        await asyncio.sleep(wait)
+
+
+async def stop():
+    global _stream_connected, _watchdog_task
+    _close_event()
+    if _watchdog_task:
+        _watchdog_task.cancel()
+        _watchdog_task = None
     logger.info("FiinQuantX stream stopped")
