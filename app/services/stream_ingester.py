@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 _pool = None
 _redis = None
 _alert_queue = None
+_loop = None  # event loop captured in async context for thread-safe coroutine scheduling
 
 # Stream state
 _stream_connected = False
@@ -106,11 +107,10 @@ def _parse_bar(raw: dict) -> Optional[dict]:
 def _on_data(raw):
     """FiinQuantX callback — called from stream thread. Schedule on event loop."""
     global _last_bar_time
-    loop = asyncio.get_event_loop()
     bar = _parse_bar(raw)
-    if bar:
+    if bar and _loop is not None:
         _last_bar_time = bar["bar_time"]
-        asyncio.run_coroutine_threadsafe(_process_bar(bar), loop)
+        asyncio.run_coroutine_threadsafe(_process_bar(bar), _loop)
 
 
 async def _process_bar(bar: dict):
@@ -185,13 +185,13 @@ def _stream_blocking():
 
 async def start():
     """Start stream with retry logic. Non-blocking (runs in thread executor)."""
-    global _stream_connected
+    global _stream_connected, _loop
+    _loop = asyncio.get_running_loop()  # Capture while in async context
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            loop = asyncio.get_event_loop()
             logger.info(f"Starting FiinQuantX stream (attempt {attempt}/{MAX_RETRIES})")
-            await loop.run_in_executor(None, _stream_blocking)
+            await _loop.run_in_executor(None, _stream_blocking)
         except ImportError:
             logger.warning("FiinQuantX not installed — stream disabled (dev mode)")
             _stream_connected = False
