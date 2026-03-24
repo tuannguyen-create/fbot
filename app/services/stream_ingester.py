@@ -188,17 +188,22 @@ def _stream_blocking():
     logger.info("FiinQuantX stream ended")
 
 
-def _close_event():
-    """Stop stream and clear references. Uses event.stop() — the only valid lifecycle method."""
+async def _close_event():
+    """Stop stream without blocking event loop.
+
+    event.stop() calls ConnectionStateChecker.stop() → thread.join(timeout=10)
+    for each of the 33 SignalR connections. Running it in an executor prevents
+    blocking the asyncio event loop during proactive restarts or crashes.
+    """
     global _event, _client, _stream_connected
     _stream_connected = False
     if _event:
+        event_ref, _event = _event, None  # grab ref before clearing global
         try:
-            _event.stop()
+            await asyncio.get_event_loop().run_in_executor(None, event_ref.stop)
             logger.info("FiinQuantX event stopped successfully")
         except Exception as e:
             logger.error(f"FiinQuantX event.stop() failed: {e}")
-        _event = None
     _client = None
 
 
@@ -227,7 +232,7 @@ async def _watchdog():
             logger.warning(
                 f"Stream stale: no data for {age_min:.1f} min — forcing reconnect"
             )
-            _close_event()
+            await _close_event()
 
 
 async def _proactive_restart_timer():
@@ -235,7 +240,7 @@ async def _proactive_restart_timer():
     await asyncio.sleep(_PROACTIVE_RESTART_SECS)
     if _stream_connected:
         logger.info("Proactive restart: closing stream before JWT expires (55 min timer)")
-        _close_event()
+        await _close_event()
 
 
 async def start():
@@ -256,20 +261,20 @@ async def start():
             logger.info("FiinQuantX stream disconnected")
         except ImportError:
             logger.warning("FiinQuantX not installed — stream disabled (dev mode)")
-            _close_event()
+            await _close_event()
             refresh_task.cancel()
             _watchdog_task.cancel()
             return
         except asyncio.CancelledError:
             logger.info("Stream task cancelled")
-            _close_event()
+            await _close_event()
             refresh_task.cancel()
             _watchdog_task.cancel()
             raise
         except Exception as e:
             logger.error(f"Stream error (attempt {attempt}): {e}", exc_info=True)
         finally:
-            _close_event()
+            await _close_event()
             refresh_task.cancel()
 
         elapsed = _loop.time() - run_start
@@ -291,7 +296,7 @@ async def start():
 
 async def stop():
     global _stream_connected, _watchdog_task
-    _close_event()
+    await _close_event()
     if _watchdog_task:
         _watchdog_task.cancel()
         _watchdog_task = None
