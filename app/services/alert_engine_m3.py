@@ -194,7 +194,7 @@ async def _analyze_ticker(ticker: str):
                     """
                     SELECT id FROM volume_alerts
                     WHERE ticker=$1
-                      AND DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh') = $2
+                      AND DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') = $2
                     ORDER BY ratio_5d DESC NULLS LAST
                     LIMIT 1
                     """,
@@ -241,6 +241,20 @@ async def _create_cycle(
         else "Phá vỡ khối lượng bất thường"
     )
 
+    # For daily M3 run (no intraday alert_id), find the best volume alert on breakout day
+    resolved_alert_id = alert_id
+    if resolved_alert_id is None:
+        async with _pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT id FROM volume_alerts
+                   WHERE ticker=$1
+                     AND DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') = $2
+                   ORDER BY ratio_5d DESC NULLS LAST LIMIT 1""",
+                ticker, breakout_date,
+            )
+        if row:
+            resolved_alert_id = row["id"]
+
     async with _pool.acquire() as conn:
         cycle_id = await conn.fetchval(
             """
@@ -248,9 +262,10 @@ async def _create_cycle(
                 (ticker, breakout_date, peak_volume, breakout_price,
                  estimated_dist_days, days_remaining, predicted_bottom_date, phase,
                  game_type, rewatch_window_start, rewatch_window_end,
-                 phase_reason, breakout_zone_low, breakout_zone_high)
+                 phase_reason, breakout_zone_low, breakout_zone_high,
+                 source_alert_id, source_alert_inferred)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-                    $9, $10, $11, $12, $13, $14)
+                    $9, $10, $11, $12, $13, $14, $15, FALSE)
             RETURNING id
             """,
             ticker,
@@ -267,6 +282,7 @@ async def _create_cycle(
             phase_reason,
             zone_low,
             zone_high,
+            resolved_alert_id,
         )
 
     logger.info(
@@ -275,11 +291,11 @@ async def _create_cycle(
         f"rewatch={rewatch_start}~{rewatch_end}"
     )
 
-    if alert_id is not None:
+    if resolved_alert_id is not None:
         async with _pool.acquire() as conn:
             await conn.execute(
                 "UPDATE volume_alerts SET cycle_event_id=$1 WHERE id=$2",
-                cycle_id, alert_id,
+                cycle_id, resolved_alert_id,
             )
 
     if _alert_queue is not None:

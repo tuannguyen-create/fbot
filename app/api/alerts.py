@@ -35,11 +35,11 @@ async def list_alerts(
         params.append(ticker.upper())
         idx += 1
     if date_from:
-        conditions.append(f"DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh') >= ${idx}")
+        conditions.append(f"DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') >= ${idx}")
         params.append(date_from)
         idx += 1
     if date_to:
-        conditions.append(f"DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh') <= ${idx}")
+        conditions.append(f"DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') <= ${idx}")
         params.append(date_to)
         idx += 1
     if status:
@@ -55,10 +55,10 @@ async def list_alerts(
         total = await conn.fetchval(f"SELECT COUNT(*) FROM volume_alerts {where}", *params)
         rows = await conn.fetch(
             f"""
-            SELECT id, ticker, fired_at, slot, volume, ratio_5d, bu_pct,
+            SELECT id, ticker, fired_at, bar_time, slot, volume, ratio_5d, bu_pct,
                    in_magic_window, status
             FROM volume_alerts {where}
-            ORDER BY fired_at DESC
+            ORDER BY bar_time DESC
             LIMIT ${idx} OFFSET ${idx+1}
             """,
             *params,
@@ -72,7 +72,7 @@ async def list_alerts(
 
 @router.get("/summary/today")
 async def today_summary(pool: asyncpg.Pool = Depends(get_db)):
-    today_ict = "DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh') = CURRENT_DATE AT TIME ZONE 'Asia/Ho_Chi_Minh'"
+    today_ict = "DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') = CURRENT_DATE AT TIME ZONE 'Asia/Ho_Chi_Minh'"
     async with pool.acquire() as conn:
         total = await conn.fetchval(f"SELECT COUNT(*) FROM volume_alerts WHERE {today_ict}")
         confirmed = await conn.fetchval(f"SELECT COUNT(*) FROM volume_alerts WHERE {today_ict} AND status='confirmed'")
@@ -100,7 +100,7 @@ async def get_alert(alert_id: int, pool: asyncpg.Pool = Depends(get_db)):
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT id, ticker, fired_at, slot, volume, ratio_5d, bu_pct,
+            SELECT id, ticker, fired_at, bar_time, slot, volume, ratio_5d, bu_pct,
                    in_magic_window, status, baseline_5d, foreign_net,
                    confirmed_at, ratio_15m, email_sent, cycle_event_id
             FROM volume_alerts WHERE id=$1

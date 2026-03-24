@@ -1,7 +1,8 @@
 export interface AlertSummary {
   id: number
   ticker: string
-  fired_at: string         // ISO UTC string
+  fired_at: string         // ISO — when system recorded the alert (may differ from bar time)
+  bar_time: string | null  // ISO — actual market bar time (slot time in ICT)
   slot: number             // 0-239
   volume: number
   ratio_5d: number | null

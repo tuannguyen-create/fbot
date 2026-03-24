@@ -54,6 +54,12 @@ export default function DashboardPage() {
         )}
       </div>
 
+      {/* === Phiên hôm nay === */}
+      <div className="flex items-center gap-2">
+        <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Phiên hôm nay</h2>
+        <div className="flex-1 h-px bg-gray-100" />
+      </div>
+
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard
@@ -76,8 +82,23 @@ export default function DashboardPage() {
         />
         <StatCard
           title="Stream"
-          value={health?.stream === 'connected' ? 'Kết nối' : 'Mất kết nối'}
-          color={health?.stream === 'connected' ? 'success' : 'danger'}
+          value={
+            !health ? '—' :
+            health.stream === 'connected' ? 'Kết nối' :
+            health.stream_reason === 'outside_hours' ? 'Ngoài giờ' :
+            health.stream_reason === 'connecting' ? 'Đang kết nối...' :
+            health.stream_reason === 'reconnecting' ? 'Kết nối lại...' :
+            health.stream_reason === 'error' ? 'Lỗi kết nối' :
+            'Mất kết nối'
+          }
+          color={
+            !health ? 'default' :
+            health.stream === 'connected' ? 'success' :
+            health.stream_reason === 'outside_hours' ? 'default' :
+            health.stream_reason === 'connecting' ? 'warning' :
+            health.stream_reason === 'reconnecting' ? 'warning' :
+            'danger'
+          }
         />
       </div>
 
@@ -90,6 +111,14 @@ export default function DashboardPage() {
       {/* Heatmap */}
       <VolumeHeatmap />
 
+      {/* === Đang theo dõi === */}
+      {cycles.length > 0 && (
+      <div className="flex items-center gap-2">
+        <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Đang theo dõi</h2>
+        <div className="flex-1 h-px bg-gray-100" />
+      </div>
+      )}
+
       {/* Active cycles */}
       {cycles.length > 0 && (
         <div className="bg-white rounded-lg border border-gray-200 p-4">
@@ -99,24 +128,38 @@ export default function DashboardPage() {
           </div>
           <div className="space-y-3">
             {cycles.map((c) => (
-              <Link key={c.id} href={`/cycles/${c.id}`} className="block hover:bg-gray-50 -mx-2 px-2 py-1 rounded">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-semibold text-sm">{c.ticker}</span>
-                  <PhaseBadge phase={c.phase} />
-                </div>
-                <CycleProgressBar
-                  elapsed={c.trading_days_elapsed ?? 0}
-                  total={c.estimated_dist_days ?? 20}
-                  phase={c.phase}
-                />
-                {c.rewatch_window_start && (
-                  <p className="text-xs text-gray-400 mt-1">
-                    Cửa sổ quan sát: {formatDateICT(c.rewatch_window_start)}
-                    {c.rewatch_window_end && ` → ${formatDateICT(c.rewatch_window_end)}`}
-                    {c.days_remaining != null && ` (còn ${c.days_remaining} ngày)`}
-                  </p>
+              <div key={c.id} className="hover:bg-gray-50 -mx-2 px-2 py-1 rounded">
+                <Link href={`/cycles/${c.id}`} className="block">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-sm">{c.ticker}</span>
+                      <span className="text-xs text-gray-400">breakout {c.breakout_date}</span>
+                    </div>
+                    <PhaseBadge phase={c.phase} />
+                  </div>
+                  <CycleProgressBar
+                    elapsed={c.trading_days_elapsed ?? 0}
+                    total={c.estimated_dist_days ?? 20}
+                    phase={c.phase}
+                  />
+                  {c.rewatch_window_start && (
+                    <p className="text-xs text-gray-400 mt-1">
+                      Cửa sổ quan sát: {formatDateICT(c.rewatch_window_start)}
+                      {c.rewatch_window_end && ` → ${formatDateICT(c.rewatch_window_end)}`}
+                      {c.days_remaining != null && ` (còn ${c.days_remaining} ngày)`}
+                    </p>
+                  )}
+                </Link>
+                {c.source_alert_id && (
+                  <Link
+                    href={`/alerts/${c.source_alert_id}`}
+                    className="text-xs text-orange-500 hover:underline"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {c.source_alert_inferred ? 'Alert liên quan' : 'Alert nguồn'} #{c.source_alert_id} →
+                  </Link>
                 )}
-              </Link>
+              </div>
             ))}
           </div>
         </div>

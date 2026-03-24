@@ -205,12 +205,16 @@ async def health():
     except Exception:
         redis_status = "error"
 
+    stream_detail = stream_ingester.get_detailed_status()
+
     return {
         "success": True,
         "data": {
             "db": db_status,
             "redis": redis_status,
-            "stream": stream_ingester.get_status(),
+            "stream": stream_detail["status"],
+            "stream_reason": stream_detail["reason"],
+            "last_bar_time": stream_detail["last_bar_time"],
             "timestamp": datetime.now(timezone.utc).isoformat(),
         },
     }

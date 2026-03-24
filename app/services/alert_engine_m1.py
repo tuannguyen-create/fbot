@@ -68,7 +68,7 @@ async def process(bar: dict):
             ratio = volume / avg_5d
 
         if ratio >= threshold:
-            await _fire_alert(ticker, bar, slot, ratio, baseline, in_magic)
+            await _fire_alert(ticker, bar, slot, ratio, baseline, in_magic, bar_time_ict)
 
         # Check pending 15-min confirmations
         await _check_confirmations(ticker, bar, slot)
@@ -77,7 +77,7 @@ async def process(bar: dict):
         logger.error(f"M1 process error for {ticker}: {e}", exc_info=True)
 
 
-async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline: dict, in_magic: bool):
+async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline: dict, in_magic: bool, bar_time: datetime = None):
     """Insert alert (with dedup) and trigger SSE + email."""
     bu = bar.get("bu", 0) or 0
     sd = bar.get("sd", 0) or 0
@@ -95,15 +95,16 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
             row = await conn.fetchrow(
                 """
                 INSERT INTO volume_alerts
-                    (ticker, slot, volume, baseline_5d, ratio_5d, bu_pct, foreign_net,
+                    (ticker, slot, bar_time, volume, baseline_5d, ratio_5d, bu_pct, foreign_net,
                      in_magic_window, status)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'fired')
-                ON CONFLICT (ticker, slot, (DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')))
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'fired')
+                ON CONFLICT (ticker, slot, (DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')))
                 DO NOTHING
                 RETURNING id, fired_at
                 """,
                 ticker,
                 slot,
+                bar_time,
                 bar["volume"],
                 avg_5d,
                 round(ratio, 4),

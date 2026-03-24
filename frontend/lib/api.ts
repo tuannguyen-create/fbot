@@ -63,6 +63,11 @@ export const watchlistApi = {
       company_name: string | null
       today_alerts: number
       active_cycle: CycleSummary | null
+      alert_history: {
+        total_30d: number
+        confirmed_30d: number
+        last_alerts: Pick<AlertSummary, 'id' | 'bar_time' | 'fired_at' | 'slot' | 'ratio_5d' | 'status' | 'in_magic_window'>[]
+      }
     }>(`/api/v1/watchlist/${ticker}/summary`),
   updateM3: (ticker: string, body: { eligible_for_m3?: boolean; game_type?: string }) =>
     apiFetch<{ ticker: string; eligible_for_m3?: boolean; game_type?: string }>(

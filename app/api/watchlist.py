@@ -110,7 +110,7 @@ async def get_ticker_summary(ticker: str, pool: asyncpg.Pool = Depends(get_db)):
             """
             SELECT COUNT(*) FROM volume_alerts
             WHERE ticker=$1
-              AND DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh') = CURRENT_DATE AT TIME ZONE 'Asia/Ho_Chi_Minh'
+              AND DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') = CURRENT_DATE AT TIME ZONE 'Asia/Ho_Chi_Minh'
             """,
             ticker,
         )
@@ -122,7 +122,7 @@ async def get_ticker_summary(ticker: str, pool: asyncpg.Pool = Depends(get_db)):
                    trading_days_elapsed, estimated_dist_days,
                    game_type, phase_reason,
                    invalidation_reason, breakout_zone_low, breakout_zone_high,
-                   predicted_bottom_date
+                   predicted_bottom_date, source_alert_id, source_alert_inferred
             FROM cycle_events
             WHERE ticker=$1
               AND phase IN ('distribution_in_progress', 'bottoming_candidate')
@@ -130,9 +130,35 @@ async def get_ticker_summary(ticker: str, pool: asyncpg.Pool = Depends(get_db)):
             """,
             ticker,
         )
+        # Alert history: 30-day stats + last 5 alerts
+        history_stats = await conn.fetchrow(
+            """
+            SELECT
+              COUNT(*) AS total_30d,
+              COUNT(*) FILTER (WHERE status = 'confirmed') AS confirmed_30d
+            FROM volume_alerts
+            WHERE ticker=$1
+              AND bar_time >= NOW() - INTERVAL '30 days'
+            """,
+            ticker,
+        )
+        last_alerts_rows = await conn.fetch(
+            """
+            SELECT id, bar_time, fired_at, slot, ratio_5d, status, in_magic_window
+            FROM volume_alerts
+            WHERE ticker=$1
+            ORDER BY bar_time DESC LIMIT 5
+            """,
+            ticker,
+        )
 
     company_name = wl_row["company_name"] if wl_row else WATCHLIST_COMPANY_NAMES.get(ticker)
     active_cycle = dict(cycle_row) if cycle_row else None
+    alert_history = {
+        "total_30d": history_stats["total_30d"] or 0,
+        "confirmed_30d": history_stats["confirmed_30d"] or 0,
+        "last_alerts": [dict(r) for r in last_alerts_rows],
+    }
 
     return {
         "success": True,
@@ -141,5 +167,6 @@ async def get_ticker_summary(ticker: str, pool: asyncpg.Pool = Depends(get_db)):
             "company_name": company_name,
             "today_alerts": today_alerts or 0,
             "active_cycle": active_cycle,
+            "alert_history": alert_history,
         },
     }
