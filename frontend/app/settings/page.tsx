@@ -100,7 +100,7 @@ export default function SettingsPage() {
         {health ? (
           <div className="space-y-2 text-sm">
             <StatusRow label="Database (PostgreSQL)" status={health.db === 'ok'} />
-            <StatusRow label="Redis Cache" status={health.redis === 'ok'} />
+            <StatusRow label="Redis Cache" status={health.redis === 'ok' ? true : health.redis === 'disabled' ? 'neutral' : false} />
             <StatusRow label="FiinQuantX Stream" status={health.stream === 'connected'} />
           </div>
         ) : (
@@ -117,12 +117,12 @@ export default function SettingsPage() {
   )
 }
 
-function StatusRow({ label, status }: { label: string; status: boolean }) {
+function StatusRow({ label, status }: { label: string; status: boolean | 'neutral' }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-gray-600">{label}</span>
-      <span className={status ? 'text-green-600' : 'text-red-600'}>
-        {status ? '✅ OK' : '❌ Lỗi'}
+      <span className={status === true ? 'text-green-600' : status === 'neutral' ? 'text-gray-400' : 'text-red-600'}>
+        {status === true ? '✅ OK' : status === 'neutral' ? '— Tắt' : '❌ Lỗi'}
       </span>
     </div>
   )

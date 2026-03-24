@@ -105,18 +105,22 @@ async def lifespan(app: FastAPI):
         logger.info("No baselines found — triggering rebuild")
         asyncio.create_task(baseline_service.rebuild_all(force=True))
 
-    # Backfill daily OHLCV — delayed 30 s so the stream can connect first
-    async def _delayed_backfill():
-        await asyncio.sleep(30)
-        await daily_ohlcv_service.backfill_historical()
-    asyncio.create_task(_delayed_backfill())
-
     # 7. APScheduler
     setup_jobs()
 
     # 8. Start SSE broadcaster + FiinQuantX stream (background tasks)
     broadcaster_task = asyncio.create_task(broadcaster())
     stream_task = asyncio.create_task(stream_ingester.start())
+
+    # Backfill daily OHLCV — wait until stream connects (up to 60 s) to avoid
+    # racing FiinQuantX session cleanup at boot; track handle for clean shutdown
+    async def _delayed_backfill():
+        for _ in range(60):
+            if stream_ingester.get_status() == 'connected':
+                break
+            await asyncio.sleep(1)
+        await daily_ohlcv_service.backfill_historical()
+    backfill_task = asyncio.create_task(_delayed_backfill())
 
     logger.info("fbot backend started ✓")
 
@@ -125,6 +129,7 @@ async def lifespan(app: FastAPI):
     # --- SHUTDOWN ---
     broadcaster_task.cancel()
     stream_task.cancel()
+    backfill_task.cancel()
     await stream_ingester.stop()
     from app.scheduler import scheduler
     scheduler.shutdown(wait=False)
