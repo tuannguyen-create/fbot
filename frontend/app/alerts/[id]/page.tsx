@@ -31,17 +31,17 @@ export default function AlertDetailPage({ params }: Props) {
 
   return (
     <div className="max-w-2xl mx-auto space-y-4">
-      <Link href="/alerts" className="text-sm text-gray-500 hover:text-gray-700">← Quay lại Alerts</Link>
+      <Link href="/alerts" className="text-sm text-gray-500 hover:text-gray-700">← Quay lại Cảnh báo</Link>
 
       <div className="bg-white rounded-lg border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-xl font-bold text-gray-900">
-              Alert #{alert.id} — {alert.ticker}
+              Cảnh báo #{alert.id} — {alert.ticker}
             </h1>
             <p className="text-sm text-gray-500">
               Phiên GD: <span className="font-medium text-gray-700">
-                {alert.bar_time ? formatAlertTime(alert.bar_time) : slotToTimeStr(alert.slot)} ICT
+                {alert.bar_time ? formatAlertTime(alert.bar_time) : slotToTimeStr(alert.slot)} giờ VN
               </span>
               <span className="mx-2 text-gray-300">·</span>
               Ghi nhận: {formatDateTimeICT(alert.fired_at)}
@@ -53,10 +53,10 @@ export default function AlertDetailPage({ params }: Props) {
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div className="bg-gray-50 rounded p-3">
             <p className="text-xs text-gray-400 uppercase mb-1">Phiên GD</p>
-            <p className="font-semibold">{alert.bar_time ? formatAlertTime(alert.bar_time) : slotToTimeStr(alert.slot)} ICT</p>
+            <p className="font-semibold">{alert.bar_time ? formatAlertTime(alert.bar_time) : slotToTimeStr(alert.slot)} giờ VN</p>
           </div>
           <div className="bg-gray-50 rounded p-3">
-            <p className="text-xs text-gray-400 uppercase mb-1">Magic Window</p>
+            <p className="text-xs text-gray-400 uppercase mb-1">Cửa sổ vàng</p>
             <p className="font-semibold">{alert.in_magic_window ? '⚡ Có' : 'Không'}</p>
           </div>
           <div className="bg-gray-50 rounded p-3">
@@ -76,11 +76,11 @@ export default function AlertDetailPage({ params }: Props) {
             <p className="font-semibold">{formatPct(alert.bu_pct)}</p>
           </div>
           <div className="bg-gray-50 rounded p-3">
-            <p className="text-xs text-gray-400 uppercase mb-1">Foreign Net</p>
+            <p className="text-xs text-gray-400 uppercase mb-1">Ngoại ròng</p>
             <p className="font-semibold">{formatVolume(alert.foreign_net)}</p>
           </div>
           <div className="bg-gray-50 rounded p-3">
-            <p className="text-xs text-gray-400 uppercase mb-1">15-phút ratio</p>
+            <p className="text-xs text-gray-400 uppercase mb-1">Tỷ lệ 15 phút</p>
             <p className="font-semibold">
               {alert.ratio_15m ? formatRatio(alert.ratio_15m) : 'Chờ...'}
               {alert.confirmed_at && (
@@ -96,7 +96,7 @@ export default function AlertDetailPage({ params }: Props) {
             <p className="mt-1">
               Chu kỳ liên quan:{' '}
               <Link href={`/cycles/${alert.cycle_event_id}`} className="text-orange-600 hover:underline">
-                Cycle #{alert.cycle_event_id} →
+                Chu kỳ #{alert.cycle_event_id} →
               </Link>
             </p>
           )}

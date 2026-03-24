@@ -36,13 +36,13 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Dashboard</h1>
+          <h1 className="text-xl font-bold text-gray-900">Tổng quan</h1>
           <p className="text-sm text-gray-500">{today}</p>
         </div>
         {health && (
           <div className="flex gap-2 text-xs">
             <span className={health.db === 'ok' ? 'text-green-600' : 'text-red-600'}>
-              DB {health.db === 'ok' ? '✅' : '❌'}
+              CSDL {health.db === 'ok' ? '✅' : '❌'}
             </span>
             <span className={
               health.redis === 'ok' ? 'text-green-600' :
@@ -71,17 +71,17 @@ export default function DashboardPage() {
         <StatCard
           title="Xác nhận"
           value={todaySummary ? `${todaySummary.confirmed}/${todaySummary.total}` : '—'}
-          subtitle="15-phút confirm"
+          subtitle="Xác nhận 15 phút"
           color="success"
         />
         <StatCard
-          title="Chu kỳ active"
+          title="Chu kỳ hoạt động"
           value={cyclesData?.total ?? '—'}
           subtitle="Đang theo dõi"
           color="default"
         />
         <StatCard
-          title="Stream"
+          title="Kết nối"
           value={
             !health ? '—' :
             health.stream === 'connected' ? 'Kết nối' :
@@ -104,7 +104,7 @@ export default function DashboardPage() {
 
       {/* Live feed */}
       <div>
-        <h2 className="text-sm font-semibold text-gray-700 mb-2">Cảnh báo real-time</h2>
+        <h2 className="text-sm font-semibold text-gray-700 mb-2">Cảnh báo trực tiếp</h2>
         <LiveAlertFeed />
       </div>
 
@@ -133,7 +133,7 @@ export default function DashboardPage() {
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-sm">{c.ticker}</span>
-                      <span className="text-xs text-gray-400">breakout {c.breakout_date}</span>
+                      <span className="text-xs text-gray-400">đột phá {c.breakout_date}</span>
                     </div>
                     <PhaseBadge phase={c.phase} />
                   </div>

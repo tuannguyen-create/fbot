@@ -8,7 +8,7 @@ export function StreamStatusBadge() {
     return (
       <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
         <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-        LIVE
+        TRỰC TIẾP
       </span>
     )
   }

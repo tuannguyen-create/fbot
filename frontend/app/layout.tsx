@@ -4,8 +4,8 @@ import { Providers } from './providers'
 import { Layout } from '@/components/Layout'
 
 export const metadata: Metadata = {
-  title: 'fbot — VN Stock Alerts',
-  description: 'Vietnam stock market alert system',
+  title: 'fbot — Cảnh báo chứng khoán',
+  description: 'Hệ thống cảnh báo thị trường chứng khoán Việt Nam',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
