@@ -1,4 +1,5 @@
-"""Notification service via Resend email."""
+"""Notification service via Resend email and Telegram."""
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -23,6 +24,30 @@ def inject_deps(pool):
         logger.info("Resend initialized")
     except ImportError:
         logger.warning("resend package not installed — emails disabled")
+
+
+async def _send_telegram(text: str) -> None:
+    """Send HTML-formatted message to all configured Telegram chat IDs."""
+    if not settings.TELEGRAM_BOT_TOKEN:
+        return
+    chat_ids = [c.strip() for c in settings.TELEGRAM_CHAT_IDS.split(",") if c.strip()]
+    if not chat_ids:
+        return
+
+    import httpx
+
+    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+    async with httpx.AsyncClient(timeout=10) as client:
+        for chat_id in chat_ids:
+            try:
+                await client.post(url, json={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                })
+            except Exception as e:
+                logger.error(f"Telegram send failed → {chat_id}: {e}")
 
 
 def _format_number(n: Optional[int]) -> str:
@@ -273,7 +298,22 @@ async def send_volume_alert_email(alert_id: int):
     magic_flag = " ⚡" if alert["in_magic_window"] else ""
     subject = f"🔥 [{ticker}] KL bất thường — {time_str} ICT | {ratio}x baseline{magic_flag}"
     html = _render_volume_alert_html(alert)
-    await _send_email(subject, html, alert_id=alert_id)
+
+    vol_str = _format_number(alert["volume"])
+    bu_str = f"{alert['bu_pct']:.0f}%" if alert["bu_pct"] is not None else "N/A"
+    magic_line = "⚡ Magic window ✅\n" if alert["in_magic_window"] else ""
+    app_link = f"{settings.FRONTEND_URL}/alerts/{alert_id}"
+    tg_text = (
+        f"🔥 <b>{ticker}</b> — KL bất thường\n"
+        f"📊 <b>{time_str} ICT</b> | <b>{ratio}x</b> baseline\n"
+        f"💰 Vol: {vol_str} | BU%: {bu_str}\n"
+        f"{magic_line}"
+        f"<a href='{app_link}'>Xem alert →</a>"
+    )
+    await asyncio.gather(
+        _send_email(subject, html, alert_id=alert_id),
+        _send_telegram(tg_text),
+    )
 
 
 async def send_cycle_breakout_email(cycle_id: int):
@@ -285,7 +325,29 @@ async def send_cycle_breakout_email(cycle_id: int):
     ticker = cycle["ticker"]
     subject = f"📈 [{ticker}] Breakout phát hiện — Phân phối {cycle['estimated_dist_days']} ngày"
     html = _render_cycle_breakout_html(cycle)
-    await _send_email(subject, html, cycle_id=cycle_id)
+
+    price = f"{cycle['breakout_price']:,.0f}đ" if cycle.get("breakout_price") else "N/A"
+    game = cycle.get("game_type") or "—"
+    reason = cycle.get("phase_reason") or ""
+    rw_start = cycle.get("rewatch_window_start")
+    rw_end   = cycle.get("rewatch_window_end")
+    rw_s = rw_start.strftime("%d/%m") if hasattr(rw_start, "strftime") else str(rw_start or "—")
+    rw_e = rw_end.strftime("%d/%m/%Y") if hasattr(rw_end, "strftime") else str(rw_end or "—")
+    zone_low = cycle.get("breakout_zone_low")
+    zone_str = f"{zone_low:,.0f}đ" if zone_low else "N/A"
+    app_link = f"{settings.FRONTEND_URL}/cycles/{cycle_id}"
+    tg_text = (
+        f"📈 <b>{ticker}</b> — Breakout phát hiện\n"
+        f"🎯 Game: {game}\n"
+        f"💰 Giá: {price} | {reason}\n"
+        f"📅 Cửa sổ: {rw_s} → {rw_e}\n"
+        f"⚠️ Vô hiệu &lt; {zone_str}\n"
+        f"<a href='{app_link}'>Xem cycle →</a>"
+    )
+    await asyncio.gather(
+        _send_email(subject, html, cycle_id=cycle_id),
+        _send_telegram(tg_text),
+    )
 
 
 async def send_cycle_10day_warning_email(cycle_id: int):
@@ -296,9 +358,22 @@ async def send_cycle_10day_warning_email(cycle_id: int):
     cycle = dict(row)
     ticker = cycle["ticker"]
     days_rem = cycle["days_remaining"] or 10
-    subject = f"⏰ [{ticker}] Còn {days_rem} ngày đến vùng tích lũy dự kiến"
+    subject = f"⏰ [{ticker}] Còn {days_rem} ngày đến cửa sổ quan sát"
     html = _render_cycle_10day_html(cycle)
-    await _send_email(subject, html, cycle_id=cycle_id)
+
+    rw_start = cycle.get("rewatch_window_start")
+    rw_s = rw_start.strftime("%d/%m/%Y") if hasattr(rw_start, "strftime") else str(rw_start or "—")
+    app_link = f"{settings.FRONTEND_URL}/cycles/{cycle_id}"
+    tg_text = (
+        f"⏰ <b>{ticker}</b> — Sắp vào cửa sổ quan sát\n"
+        f"Còn ~{days_rem} ngày GD\n"
+        f"Cửa sổ mở: {rw_s}\n"
+        f"<a href='{app_link}'>Theo dõi →</a>"
+    )
+    await asyncio.gather(
+        _send_email(subject, html, cycle_id=cycle_id),
+        _send_telegram(tg_text),
+    )
 
 
 async def send_cycle_bottom_email(cycle_id: int):
@@ -308,6 +383,18 @@ async def send_cycle_bottom_email(cycle_id: int):
         return
     cycle = dict(row)
     ticker = cycle["ticker"]
-    subject = f"🟢 [{ticker}] Vào vùng đáy — KL thấp 3 phiên liên tiếp"
+    elapsed = cycle.get("trading_days_elapsed") or 0
+    subject = f"🟢 [{ticker}] Tín hiệu tạo đáy — KL thấp 3 phiên liên tiếp"
     html = _render_cycle_bottom_html(cycle)
-    await _send_email(subject, html, cycle_id=cycle_id)
+
+    app_link = f"{settings.FRONTEND_URL}/cycles/{cycle_id}"
+    tg_text = (
+        f"🟢 <b>{ticker}</b> — Tín hiệu tạo đáy\n"
+        f"KL thấp 3 phiên liên tiếp (sau {elapsed} ngày phân phối)\n"
+        f"⚡ Quan sát kỹ phiên tiếp theo\n"
+        f"<a href='{app_link}'>Xem cycle →</a>"
+    )
+    await asyncio.gather(
+        _send_email(subject, html, cycle_id=cycle_id),
+        _send_telegram(tg_text),
+    )

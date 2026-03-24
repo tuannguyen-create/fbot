@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     RESEND_FROM: str = "alerts@fbot.vn"
     RESEND_TO: str = "tuan.nguyen@finful.co"
 
+    # Telegram (optional — empty = disabled)
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_IDS: str = ""  # comma-separated chat IDs
+
     # App
     APP_ENV: str = "development"
     LOG_LEVEL: str = "INFO"
