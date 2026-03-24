@@ -54,7 +54,8 @@ def upgrade() -> None:
         f"UPDATE watchlist SET game_type = '{_DEFAULT_GAME_TYPE}' WHERE game_type IS NULL"
     )
 
-    # --- cycle_events: rename phases ---
+    # --- cycle_events: widen phase column then rename phases ---
+    op.execute("ALTER TABLE cycle_events ALTER COLUMN phase TYPE VARCHAR(30)")
     op.execute("""
         UPDATE cycle_events
         SET phase = 'distribution_in_progress'
