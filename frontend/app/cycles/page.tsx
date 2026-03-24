@@ -8,7 +8,7 @@ import { formatDateICT } from '@/lib/formatters'
 import Link from 'next/link'
 
 export default function CyclesPage() {
-  const [phase, setPhase] = useState<string>('distributing,bottoming')
+  const [phase, setPhase] = useState<string>('distribution_in_progress,bottoming_candidate')
 
   const { data, isLoading } = useQuery({
     queryKey: ['cycles', 'list', phase],
@@ -27,9 +27,10 @@ export default function CyclesPage() {
           onChange={(e) => setPhase(e.target.value)}
           className="border border-gray-300 rounded px-2 py-1 text-sm"
         >
-          <option value="distributing,bottoming">Đang active</option>
-          <option value="distributing">Phân phối</option>
-          <option value="bottoming">Tạo đáy</option>
+          <option value="distribution_in_progress,bottoming_candidate">Đang active</option>
+          <option value="distribution_in_progress">Đang phân phối</option>
+          <option value="bottoming_candidate">Tạo đáy</option>
+          <option value="invalidated">Vô hiệu</option>
           <option value="">Tất cả</option>
         </select>
       </div>
@@ -53,6 +54,11 @@ export default function CyclesPage() {
                 <div className="flex items-center gap-2">
                   <span className="text-lg font-bold text-gray-900">{c.ticker}</span>
                   <PhaseBadge phase={c.phase} />
+                  {c.game_type && (
+                    <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                      {c.game_type}
+                    </span>
+                  )}
                 </div>
                 <div className="text-xs text-gray-400">
                   Breakout: {formatDateICT(c.breakout_date)}
@@ -65,16 +71,21 @@ export default function CyclesPage() {
                 phase={c.phase}
               />
 
-              {c.predicted_bottom_date && (
+              {c.rewatch_window_start ? (
                 <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
-                  <span>Đáy dự kiến: <b>{formatDateICT(c.predicted_bottom_date)}</b></span>
+                  <span>
+                    Cửa sổ quan sát: <b>{formatDateICT(c.rewatch_window_start)}</b>
+                    {c.rewatch_window_end && <> → <b>{formatDateICT(c.rewatch_window_end)}</b></>}
+                  </span>
                   {c.days_remaining != null && (
                     <span className={`font-medium ${c.days_remaining <= 10 ? 'text-orange-600' : ''}`}>
                       {c.days_remaining <= 10 ? '⏰ ' : ''}Còn {c.days_remaining} ngày
                     </span>
                   )}
                 </div>
-              )}
+              ) : c.invalidation_reason ? (
+                <p className="mt-1 text-xs text-red-400">{c.phase_reason}</p>
+              ) : null}
             </Link>
           ))}
         </div>

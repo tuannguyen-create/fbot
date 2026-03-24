@@ -4,6 +4,7 @@ from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services import alert_engine_m3
+from app.services.alert_engine_m3 import PHASE_DISTRIBUTION, PHASE_BOTTOMING, PHASE_INVALIDATED
 from app.config import settings
 
 
@@ -35,6 +36,10 @@ def make_daily_rows(n=22, base_volume=1_000_000):
     return rows
 
 
+# Patch _get_ticker_meta for all M3 tests — avoids real DB call for eligibility
+_MOCK_META = {"eligible": True, "game_type": "institutional"}
+
+
 class TestBreakoutDetection:
     @pytest.mark.asyncio
     async def test_breakout_detected(self, mock_pool):
@@ -51,7 +56,8 @@ class TestBreakoutDetection:
         conn.fetchrow = AsyncMock(return_value=None)  # no existing active cycle
         conn.fetchval = AsyncMock(return_value=99)  # new cycle_id
 
-        with patch("app.services.alert_engine_m3.notification") as mock_notif, \
+        with patch("app.services.alert_engine_m3._get_ticker_meta", new=AsyncMock(return_value=_MOCK_META)), \
+             patch("app.services.alert_engine_m3.notification") as mock_notif, \
              patch("app.services.alert_engine_m3.is_trading_day", return_value=True):
             mock_notif.send_cycle_breakout_email = AsyncMock()
             await alert_engine_m3._analyze_ticker("HPG")
@@ -73,7 +79,8 @@ class TestBreakoutDetection:
         conn.fetchval = AsyncMock(return_value=None)
         conn.execute = AsyncMock()
 
-        with patch("app.services.alert_engine_m3.notification") as mock_notif:
+        with patch("app.services.alert_engine_m3._get_ticker_meta", new=AsyncMock(return_value=_MOCK_META)), \
+             patch("app.services.alert_engine_m3.notification") as mock_notif:
             mock_notif.send_cycle_breakout_email = AsyncMock()
             await alert_engine_m3._analyze_ticker("HPG")
 
@@ -94,11 +101,24 @@ class TestBreakoutDetection:
         conn.fetchval = AsyncMock(return_value=None)
         conn.execute = AsyncMock()
 
-        with patch("app.services.alert_engine_m3.notification") as mock_notif:
+        with patch("app.services.alert_engine_m3._get_ticker_meta", new=AsyncMock(return_value=_MOCK_META)), \
+             patch("app.services.alert_engine_m3.notification") as mock_notif:
             mock_notif.send_cycle_breakout_email = AsyncMock()
             await alert_engine_m3._analyze_ticker("HPG")
 
         conn.fetchval.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ineligible_ticker_skipped(self, mock_pool):
+        """eligible_for_m3=False → skip entirely"""
+        pool, conn = mock_pool
+        alert_engine_m3.inject_deps(pool, MagicMock(), None)
+
+        with patch("app.services.alert_engine_m3._get_ticker_meta",
+                   new=AsyncMock(return_value={"eligible": False, "game_type": "institutional"})):
+            await alert_engine_m3._analyze_ticker("HPG")
+
+        conn.fetch.assert_not_called()
 
 
 class TestCycleUpdate:
@@ -112,11 +132,13 @@ class TestCycleUpdate:
             "id": 5,
             "ticker": "NVL",
             "breakout_date": date(2026, 3, 1),
-            "phase": "distributing",
+            "phase": PHASE_DISTRIBUTION,
             "estimated_dist_days": 20,
             "days_remaining": 9,
             "alert_sent_10d": False,
             "alert_sent_bottom": False,
+            "breakout_price": None,
+            "breakout_zone_low": None,
         }
         rows = make_daily_rows(22, 500_000)
 
@@ -132,7 +154,7 @@ class TestCycleUpdate:
 
     @pytest.mark.asyncio
     async def test_bottom_detected_low_volume(self, mock_pool):
-        """3 consecutive days vol < 50% MA20 + days_remaining<=0 → bottom alert"""
+        """3 consecutive days vol < 50% MA20 + days_remaining<=0 → bottoming_candidate"""
         pool, conn = mock_pool
         alert_engine_m3.inject_deps(pool, MagicMock(), None)
 
@@ -140,11 +162,13 @@ class TestCycleUpdate:
             "id": 6,
             "ticker": "PDR",
             "breakout_date": date(2026, 2, 10),
-            "phase": "distributing",
+            "phase": PHASE_DISTRIBUTION,
             "estimated_dist_days": 20,
             "days_remaining": 0,
             "alert_sent_10d": True,
             "alert_sent_bottom": False,
+            "breakout_price": None,
+            "breakout_zone_low": None,
         }
         ma20 = 1_000_000
         # Last 3 rows all < 50% MA20 = < 500k
@@ -159,9 +183,9 @@ class TestCycleUpdate:
             conn.execute = AsyncMock()
             await alert_engine_m3._update_cycle("PDR", cycle, rows, ma20)
 
-        # Should call execute with phase='bottoming'
+        # Should call execute with phase='bottoming_candidate'
         calls = [str(c) for c in conn.execute.call_args_list]
-        assert any("bottoming" in c for c in calls)
+        assert any(PHASE_BOTTOMING in c for c in calls)
 
     @pytest.mark.asyncio
     async def test_10day_warning_not_sent_if_already_sent(self, mock_pool):
@@ -173,11 +197,13 @@ class TestCycleUpdate:
             "id": 7,
             "ticker": "KBC",
             "breakout_date": date(2026, 3, 1),
-            "phase": "distributing",
+            "phase": PHASE_DISTRIBUTION,
             "estimated_dist_days": 20,
             "days_remaining": 8,
             "alert_sent_10d": True,  # Already sent
             "alert_sent_bottom": False,
+            "breakout_price": None,
+            "breakout_zone_low": None,
         }
         rows = make_daily_rows(22, 1_000_000)
         conn.execute = AsyncMock()
@@ -188,3 +214,33 @@ class TestCycleUpdate:
             await alert_engine_m3._update_cycle("KBC", cycle, rows, 1_000_000)
 
         mock_notif.send_cycle_10day_warning_email.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_invalidation_on_price_drop(self, mock_pool):
+        """close < breakout_zone_low → cycle invalidated"""
+        pool, conn = mock_pool
+        alert_engine_m3.inject_deps(pool, MagicMock(), None)
+
+        cycle = {
+            "id": 8,
+            "ticker": "NVL",
+            "breakout_date": date(2026, 3, 1),
+            "phase": PHASE_DISTRIBUTION,
+            "estimated_dist_days": 20,
+            "days_remaining": 15,
+            "alert_sent_10d": False,
+            "alert_sent_bottom": False,
+            "breakout_price": 20000.0,
+            "breakout_zone_low": 19400.0,  # 3% below 20000
+        }
+        # today close = 19000 < 19400 zone_low → invalidate
+        rows = make_daily_rows(22, 1_000_000)
+        rows[-1] = FakeRow({**rows[-1], "close": 19000.0})
+
+        conn.execute = AsyncMock()
+
+        with patch("app.services.alert_engine_m3.count_trading_days_between", return_value=5):
+            await alert_engine_m3._update_cycle("NVL", cycle, rows, 1_000_000)
+
+        calls = [str(c) for c in conn.execute.call_args_list]
+        assert any(PHASE_INVALIDATED in c for c in calls)

@@ -57,24 +57,24 @@ def setup_jobs():
         misfire_grace_time=3600,
     )
 
-    # M3 daily analysis at 15:05 ICT (5 min after close)
-    scheduler.add_job(
-        _job_m3_daily,
-        trigger="cron",
-        hour=15,
-        minute=5,
-        id="m3_daily",
-        replace_existing=True,
-        misfire_grace_time=3600,
-    )
-
-    # Aggregate intraday_1m → daily_ohlcv at 15:10 ICT (after M3 runs)
+    # Aggregate intraday_1m → daily_ohlcv at 15:05 ICT (must run before M3 reads daily_ohlcv)
     scheduler.add_job(
         _job_daily_ohlcv_aggregate,
         trigger="cron",
         hour=15,
-        minute=10,
+        minute=5,
         id="daily_ohlcv_aggregate",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    # M3 daily analysis at 15:10 ICT (after daily_ohlcv is aggregated)
+    scheduler.add_job(
+        _job_m3_daily,
+        trigger="cron",
+        hour=15,
+        minute=10,
+        id="m3_daily",
         replace_existing=True,
         misfire_grace_time=3600,
     )

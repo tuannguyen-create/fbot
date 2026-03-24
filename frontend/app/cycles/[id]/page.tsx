@@ -40,8 +40,21 @@ export default function CycleDetailPage({ params }: Props) {
             <h1 className="text-xl font-bold text-gray-900">Cycle #{cycle.id} — {cycle.ticker}</h1>
             <p className="text-sm text-gray-500">Breakout: {formatDateICT(cycle.breakout_date)}</p>
           </div>
-          <PhaseBadge phase={cycle.phase} />
+          <div className="flex items-center gap-2">
+            <PhaseBadge phase={cycle.phase} />
+            {cycle.game_type && (
+              <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                {cycle.game_type}
+              </span>
+            )}
+          </div>
         </div>
+
+        {cycle.phase_reason && (
+          <p className="text-sm text-gray-600 bg-gray-50 rounded p-2 mb-4">
+            {cycle.phase_reason}
+          </p>
+        )}
 
         <div className="mb-4">
           <CycleProgressBar
@@ -67,17 +80,33 @@ export default function CycleDetailPage({ params }: Props) {
             <p className="font-semibold">{cycle.estimated_dist_days ?? 20} ngày GD</p>
           </div>
           <div className="bg-orange-50 rounded p-3">
-            <p className="text-xs text-gray-400 uppercase mb-1">Đáy dự kiến</p>
-            <p className="font-semibold text-orange-700">
-              {cycle.predicted_bottom_date ? formatDateICT(cycle.predicted_bottom_date) : 'N/A'}
+            <p className="text-xs text-gray-400 uppercase mb-1">Cửa sổ quan sát</p>
+            <p className="font-semibold text-orange-700 text-xs">
+              {cycle.rewatch_window_start
+                ? `${formatDateICT(cycle.rewatch_window_start)} → ${formatDateICT(cycle.rewatch_window_end ?? cycle.rewatch_window_start)}`
+                : 'N/A'}
             </p>
           </div>
+          {cycle.breakout_zone_low && (
+            <div className="bg-red-50 rounded p-3">
+              <p className="text-xs text-gray-400 uppercase mb-1">Ngưỡng vô hiệu</p>
+              <p className="font-semibold text-red-600">
+                &lt; {cycle.breakout_zone_low.toLocaleString()}đ
+              </p>
+            </div>
+          )}
+          {cycle.invalidation_reason && (
+            <div className="bg-red-50 rounded p-3 col-span-2">
+              <p className="text-xs text-gray-400 uppercase mb-1">Lý do vô hiệu hóa</p>
+              <p className="font-semibold text-red-600">{cycle.phase_reason}</p>
+            </div>
+          )}
         </div>
 
         <div className="mt-4 pt-4 border-t border-gray-100 space-y-1 text-sm text-gray-500">
           <p>Breakout email: {cycle.breakout_email_sent ? '✅ Đã gửi' : '⏳ Chờ'}</p>
-          <p>10-ngày warning: {cycle.alert_sent_10d ? '✅ Đã gửi' : '⏳ Chờ'}</p>
-          <p>Bottom alert: {cycle.alert_sent_bottom ? '✅ Đã gửi' : '⏳ Chờ'}</p>
+          <p>Cảnh báo 10 ngày: {cycle.alert_sent_10d ? '✅ Đã gửi' : '⏳ Chờ'}</p>
+          <p>Tín hiệu tạo đáy: {cycle.alert_sent_bottom ? '✅ Đã gửi' : '⏳ Chờ'}</p>
         </div>
       </div>
     </div>
