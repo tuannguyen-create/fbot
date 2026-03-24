@@ -28,7 +28,7 @@ export interface AppSettings {
 
 export interface HealthStatus {
   db: 'ok' | 'error'
-  redis: 'ok' | 'error'
+  redis: 'ok' | 'error' | 'disabled'
   stream: 'connected' | 'disconnected'
   timestamp: string
 }

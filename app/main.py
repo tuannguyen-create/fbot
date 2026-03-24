@@ -74,11 +74,8 @@ async def lifespan(app: FastAPI):
         logger.critical(f"DB connection failed: {e}")
         raise
 
-    # 2. Run migrations
-    try:
-        await _run_alembic_migrations()
-    except Exception as e:
-        logger.warning(f"Migration skipped (may already be applied): {e}")
+    # 2. Run migrations — fail-fast: a schema mismatch is fatal
+    await _run_alembic_migrations()
 
     # 3. Redis
     try:
@@ -108,8 +105,11 @@ async def lifespan(app: FastAPI):
         logger.info("No baselines found — triggering rebuild")
         asyncio.create_task(baseline_service.rebuild_all(force=True))
 
-    # Backfill daily OHLCV from FiinQuantX historical data at startup
-    asyncio.create_task(daily_ohlcv_service.backfill_historical())
+    # Backfill daily OHLCV — delayed 30 s so the stream can connect first
+    async def _delayed_backfill():
+        await asyncio.sleep(30)
+        await daily_ohlcv_service.backfill_historical()
+    asyncio.create_task(_delayed_backfill())
 
     # 7. APScheduler
     setup_jobs()
