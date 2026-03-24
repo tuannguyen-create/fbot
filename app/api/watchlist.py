@@ -1,6 +1,8 @@
 """Watchlist API endpoints."""
 import logging
-from fastapi import APIRouter, Depends
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 import asyncpg
 
 from app.config import settings
@@ -46,14 +48,53 @@ WATCHLIST_COMPANY_NAMES = {
 }
 
 
+class TickerM3Settings(BaseModel):
+    eligible_for_m3: Optional[bool] = None
+    game_type: Optional[str] = None
+
+
 @router.get("")
 async def list_watchlist(pool: asyncpg.Pool = Depends(get_db)):
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT ticker, company_name, exchange, sector, in_vn30, active FROM watchlist ORDER BY in_vn30 DESC, ticker"
+            """
+            SELECT ticker, company_name, exchange, sector, in_vn30, active,
+                   eligible_for_m3, game_type
+            FROM watchlist
+            ORDER BY in_vn30 DESC, ticker
+            """
         )
     tickers = [dict(r) for r in rows]
     return {"success": True, "data": {"tickers": tickers}}
+
+
+@router.patch("/{ticker}/m3")
+async def update_ticker_m3_settings(
+    ticker: str,
+    body: TickerM3Settings,
+    pool: asyncpg.Pool = Depends(get_db),
+):
+    ticker = ticker.upper()
+    updates = {}
+    if body.eligible_for_m3 is not None:
+        updates["eligible_for_m3"] = body.eligible_for_m3
+    if body.game_type is not None:
+        updates["game_type"] = body.game_type
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    set_clause = ", ".join(f"{k}=${i+2}" for i, k in enumerate(updates))
+    values = [ticker] + list(updates.values())
+
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            f"UPDATE watchlist SET {set_clause} WHERE ticker=$1",
+            *values,
+        )
+    if result == "UPDATE 0":
+        raise HTTPException(status_code=404, detail=f"Ticker {ticker} not found")
+    return {"success": True, "data": {"ticker": ticker, **updates}}
 
 
 @router.get("/{ticker}/summary")
@@ -77,9 +118,12 @@ async def get_ticker_summary(ticker: str, pool: asyncpg.Pool = Depends(get_db)):
         cycle_row = await conn.fetchrow(
             """
             SELECT id, ticker, breakout_date, phase, days_remaining,
-                   predicted_bottom_date, trading_days_elapsed, estimated_dist_days
+                   rewatch_window_start, rewatch_window_end,
+                   trading_days_elapsed, estimated_dist_days,
+                   game_type, phase_reason
             FROM cycle_events
-            WHERE ticker=$1 AND phase IN ('distributing', 'bottoming')
+            WHERE ticker=$1
+              AND phase IN ('distribution_in_progress', 'bottoming_candidate')
             ORDER BY created_at DESC LIMIT 1
             """,
             ticker,

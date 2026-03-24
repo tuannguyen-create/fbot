@@ -104,8 +104,14 @@ def _render_cycle_breakout_html(cycle: dict) -> str:
     peak_vol = _format_number(cycle["peak_volume"])
     price = f"{cycle['breakout_price']:,.0f}đ" if cycle["breakout_price"] else "N/A"
     est_days = cycle["estimated_dist_days"] or 20
-    predicted_bottom = cycle["predicted_bottom_date"]
-    bottom_str = predicted_bottom.strftime("%d/%m/%Y") if hasattr(predicted_bottom, "strftime") else str(predicted_bottom)
+    game_type = cycle.get("game_type") or "—"
+    phase_reason = cycle.get("phase_reason") or ""
+    zone_low = f"{cycle['breakout_zone_low']:,.0f}đ" if cycle.get("breakout_zone_low") else "N/A"
+
+    rw_start = cycle.get("rewatch_window_start")
+    rw_end   = cycle.get("rewatch_window_end")
+    rw_start_str = rw_start.strftime("%d/%m/%Y") if hasattr(rw_start, "strftime") else str(rw_start or "—")
+    rw_end_str   = rw_end.strftime("%d/%m/%Y")   if hasattr(rw_end,   "strftime") else str(rw_end or "—")
 
     return f"""
 <!DOCTYPE html>
@@ -129,16 +135,28 @@ def _render_cycle_breakout_html(cycle: dict) -> str:
       <td style="padding:8px;">{peak_vol}</td>
     </tr>
     <tr>
+      <td style="padding:8px; font-weight:bold;">Loại game</td>
+      <td style="padding:8px;">{game_type}</td>
+    </tr>
+    <tr style="background:#f9f9f9;">
+      <td style="padding:8px; font-weight:bold;">Tín hiệu</td>
+      <td style="padding:8px;">{phase_reason}</td>
+    </tr>
+    <tr>
       <td style="padding:8px; font-weight:bold;">Dự kiến phân phối</td>
       <td style="padding:8px;">{est_days} ngày giao dịch</td>
     </tr>
     <tr style="background:#f9f9f9;">
-      <td style="padding:8px; font-weight:bold;">Dự kiến vùng đáy</td>
-      <td style="padding:8px; color:#27ae60;"><b>{bottom_str}</b></td>
+      <td style="padding:8px; font-weight:bold;">Cửa sổ quan sát</td>
+      <td style="padding:8px; color:#27ae60;"><b>{rw_start_str} → {rw_end_str}</b></td>
+    </tr>
+    <tr>
+      <td style="padding:8px; font-weight:bold;">Ngưỡng vô hiệu hóa</td>
+      <td style="padding:8px; color:#e74c3c;">&lt; {zone_low}</td>
     </tr>
   </table>
   <p style="color:#666; margin-top:12px;">
-    ⚠️ fbot sẽ nhắc lại 10 ngày trước vùng đáy dự kiến.
+    ⚠️ fbot sẽ cảnh báo khi tiến gần cửa sổ quan sát và khi xuất hiện dấu hiệu tạo đáy.
   </p>
   <p style="color:#888; font-size:0.85em;">fbot — Hệ thống cảnh báo chứng khoán tự động</p>
 </body>
@@ -148,20 +166,21 @@ def _render_cycle_breakout_html(cycle: dict) -> str:
 
 def _render_cycle_10day_html(cycle: dict) -> str:
     ticker = cycle["ticker"]
-    predicted_bottom = cycle["predicted_bottom_date"]
-    bottom_str = predicted_bottom.strftime("%d/%m/%Y") if hasattr(predicted_bottom, "strftime") else str(predicted_bottom)
     days_rem = cycle["days_remaining"] or 10
+    rw_start = cycle.get("rewatch_window_start")
+    rw_start_str = rw_start.strftime("%d/%m/%Y") if hasattr(rw_start, "strftime") else str(rw_start or "—")
 
     return f"""
 <!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"></head>
 <body style="font-family: Arial, sans-serif; color: #222; padding: 20px; max-width: 600px;">
-  <h2 style="color:#3498db;">⏰ Nhắc nhở: Còn {days_rem} ngày đến vùng tích lũy — {ticker}</h2>
-  <p>Vùng đáy dự kiến: <b style="font-size:1.2em;">{bottom_str}</b></p>
+  <h2 style="color:#3498db;">⏰ Sắp vào cửa sổ quan sát — {ticker}</h2>
+  <p>Còn khoảng <b>{days_rem} ngày giao dịch</b> trước khi mở cửa sổ quan sát.</p>
+  <p>Cửa sổ quan sát dự kiến mở: <b style="font-size:1.2em;">{rw_start_str}</b></p>
   <p style="color:#666;">
     Hãy chuẩn bị theo dõi {ticker} trong {days_rem} ngày tới.<br>
-    fbot sẽ thông báo khi phát hiện dấu hiệu đáy thực sự.
+    fbot sẽ thông báo khi phát hiện dấu hiệu tạo đáy/tích lũy.
   </p>
   <p style="color:#888; font-size:0.85em;">fbot — Hệ thống cảnh báo chứng khoán tự động</p>
 </body>
