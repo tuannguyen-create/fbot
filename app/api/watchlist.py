@@ -122,7 +122,7 @@ async def get_ticker_summary(ticker: str, pool: asyncpg.Pool = Depends(get_db)):
                    trading_days_elapsed, estimated_dist_days,
                    game_type, phase_reason,
                    invalidation_reason, breakout_zone_low, breakout_zone_high,
-                   predicted_bottom_date, source_alert_id
+                   predicted_bottom_date, source_alert_id, source_alert_inferred
             FROM cycle_events
             WHERE ticker=$1
               AND phase IN ('distribution_in_progress', 'bottoming_candidate')

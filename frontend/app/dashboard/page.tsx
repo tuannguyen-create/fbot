@@ -54,6 +54,12 @@ export default function DashboardPage() {
         )}
       </div>
 
+      {/* === Phiên hôm nay === */}
+      <div className="flex items-center gap-2">
+        <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Phiên hôm nay</h2>
+        <div className="flex-1 h-px bg-gray-100" />
+      </div>
+
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard
@@ -105,6 +111,14 @@ export default function DashboardPage() {
       {/* Heatmap */}
       <VolumeHeatmap />
 
+      {/* === Đang theo dõi === */}
+      {cycles.length > 0 && (
+      <div className="flex items-center gap-2">
+        <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Đang theo dõi</h2>
+        <div className="flex-1 h-px bg-gray-100" />
+      </div>
+      )}
+
       {/* Active cycles */}
       {cycles.length > 0 && (
         <div className="bg-white rounded-lg border border-gray-200 p-4">
@@ -142,7 +156,7 @@ export default function DashboardPage() {
                     className="text-xs text-orange-500 hover:underline"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    Alert nguồn #{c.source_alert_id} →
+                    {c.source_alert_inferred ? 'Alert liên quan' : 'Alert nguồn'} #{c.source_alert_id} →
                   </Link>
                 )}
               </div>

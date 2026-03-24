@@ -263,9 +263,9 @@ async def _create_cycle(
                  estimated_dist_days, days_remaining, predicted_bottom_date, phase,
                  game_type, rewatch_window_start, rewatch_window_end,
                  phase_reason, breakout_zone_low, breakout_zone_high,
-                 source_alert_id)
+                 source_alert_id, source_alert_inferred)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-                    $9, $10, $11, $12, $13, $14, $15)
+                    $9, $10, $11, $12, $13, $14, $15, FALSE)
             RETURNING id
             """,
             ticker,

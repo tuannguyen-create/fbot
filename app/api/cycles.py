@@ -45,7 +45,7 @@ async def list_cycles(
                    game_type, rewatch_window_start, rewatch_window_end,
                    phase_reason, invalidation_reason,
                    breakout_zone_low, breakout_zone_high,
-                   source_alert_id
+                   source_alert_id, source_alert_inferred
             FROM cycle_events {where}
             ORDER BY created_at DESC
             LIMIT ${idx} OFFSET ${idx+1}
@@ -70,7 +70,7 @@ async def get_cycle(cycle_id: int, pool: asyncpg.Pool = Depends(get_db)):
                    game_type, rewatch_window_start, rewatch_window_end,
                    phase_reason, invalidation_reason,
                    breakout_zone_low, breakout_zone_high,
-                   source_alert_id,
+                   source_alert_id, source_alert_inferred,
                    created_at, updated_at
             FROM cycle_events WHERE id=$1
             """,

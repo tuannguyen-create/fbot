@@ -132,7 +132,7 @@ export default function TickerDetailPage({ params }: { params: Promise<{ ticker:
                 href={`/alerts/${cycle.source_alert_id}`}
                 className="inline-block text-xs text-orange-400 hover:underline"
               >
-                Alert nguồn #{cycle.source_alert_id} →
+                {cycle.source_alert_inferred ? 'Alert liên quan' : 'Alert nguồn'} #{cycle.source_alert_id} →
               </Link>
             )}
           </div>

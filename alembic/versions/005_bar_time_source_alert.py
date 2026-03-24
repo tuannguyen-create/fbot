@@ -81,8 +81,22 @@ def upgrade() -> None:
         WHERE source_alert_id IS NULL
     """)
 
+    # source_alert_inferred: TRUE = heuristic backfill (best-guess), FALSE = canonical (M1→M3 path)
+    # All rows that already existed when this migration runs get the inferred flag.
+    # New cycles created after deployment always insert FALSE (the column default).
+    op.execute("""
+        ALTER TABLE cycle_events
+        ADD COLUMN IF NOT EXISTS source_alert_inferred BOOLEAN NOT NULL DEFAULT FALSE
+    """)
+    op.execute("""
+        UPDATE cycle_events
+        SET source_alert_inferred = TRUE
+        WHERE source_alert_id IS NOT NULL
+    """)
+
 
 def downgrade() -> None:
+    op.execute("ALTER TABLE cycle_events DROP COLUMN IF EXISTS source_alert_inferred")
     op.execute("ALTER TABLE cycle_events DROP COLUMN IF EXISTS source_alert_id")
 
     # Restore old fired_at-based unique index
