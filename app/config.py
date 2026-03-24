@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     TIMEZONE: str = "Asia/Ho_Chi_Minh"
     FRONTEND_URL: str = "http://localhost:3000"
+    ADMIN_API_KEY: str = ""  # Empty = no auth required (dev); set in production .env
 
     # Alert thresholds
     THRESHOLD_NORMAL: float = 2.0
