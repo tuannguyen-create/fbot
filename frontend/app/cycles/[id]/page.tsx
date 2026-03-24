@@ -98,7 +98,7 @@ export default function CycleDetailPage({ params }: Props) {
           {cycle.invalidation_reason && (
             <div className="bg-red-50 rounded p-3 col-span-2">
               <p className="text-xs text-gray-400 uppercase mb-1">Lý do vô hiệu hóa</p>
-              <p className="font-semibold text-red-600">{cycle.phase_reason}</p>
+              <p className="font-semibold text-red-600">{cycle.invalidation_reason}</p>
             </div>
           )}
         </div>

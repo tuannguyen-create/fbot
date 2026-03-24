@@ -84,7 +84,7 @@ export default function CyclesPage() {
                   )}
                 </div>
               ) : c.invalidation_reason ? (
-                <p className="mt-1 text-xs text-red-400">{c.phase_reason}</p>
+                <p className="mt-1 text-xs text-red-400">{c.invalidation_reason}</p>
               ) : null}
             </Link>
           ))}
