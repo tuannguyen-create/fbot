@@ -45,6 +45,25 @@ def get_status() -> str:
     return "connected" if _stream_connected else "disconnected"
 
 
+def _current_session_open_utc(now_ict) -> Optional[datetime]:
+    """Return UTC time when today's active trading session most recently opened.
+
+    If it is morning session (9:00–11:30 ICT) → returns today 09:00 ICT as UTC.
+    If it is afternoon session (13:00–14:30 ICT) → returns today 13:00 ICT as UTC.
+    Called only when is_trading_hours() is already True, so no other case occurs.
+    """
+    from zoneinfo import ZoneInfo
+    from app.utils.trading_hours import BREAK_END
+    ict_tz = ZoneInfo("Asia/Ho_Chi_Minh")
+    d = now_ict.date()
+    # is_trading_hours is True → either morning (9:00-11:30) or afternoon (13:00-14:30)
+    if now_ict.time() >= BREAK_END:
+        open_dt = datetime(d.year, d.month, d.day, 13, 0, tzinfo=ict_tz)
+    else:
+        open_dt = datetime(d.year, d.month, d.day, 9, 0, tzinfo=ict_tz)
+    return open_dt.astimezone(timezone.utc)
+
+
 def get_detailed_status() -> dict:
     """Return stream status with reason and last_bar_time for rich UI display."""
     from zoneinfo import ZoneInfo
@@ -61,15 +80,23 @@ def get_detailed_status() -> dict:
     if not is_trading_day(now_ict.date()) or not is_trading_hours(now_ict.time()):
         reason = "outside_hours"
     elif _last_bar_time is None:
-        # Never received a bar — still in initial connect window or already failed
+        # Never received a bar this process lifetime — initial connect window
         elapsed_startup = (now_utc - _startup_at).total_seconds() if _startup_at else 9999
         reason = "connecting" if elapsed_startup < _CONNECT_TIMEOUT_SECS else "error"
     elif (now_utc - _last_bar_time).total_seconds() < 300:
         # Had data recently — temporary disconnect, expect recovery
         reason = "reconnecting"
     else:
-        # Stale for >5 min during trading hours — real error
-        reason = "error"
+        # Last bar is stale. Check whether it predates today's session open —
+        # if so the process ran overnight and hasn't yet received today's first bar.
+        # Apply the same connecting grace period rather than immediately showing error.
+        session_open_utc = _current_session_open_utc(now_ict)
+        if _last_bar_time < session_open_utc:
+            elapsed_since_open = (now_utc - session_open_utc).total_seconds()
+            reason = "connecting" if elapsed_since_open < _CONNECT_TIMEOUT_SECS else "error"
+        else:
+            # Bar is from today's session but stale >5 min — real error
+            reason = "error"
 
     return {"status": "disconnected", "reason": reason, "last_bar_time": last_iso}
 
