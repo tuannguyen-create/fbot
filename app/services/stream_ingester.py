@@ -25,9 +25,9 @@ BACKOFF_BASE = 60           # Minimum wait before reconnect (unplanned crash)
 BACKOFF_MAX = 300           # 5 min max between retries
 _STALE_MINUTES = 10         # Watchdog threshold: no data for N min during trading hours
 _PROACTIVE_RESTART_SECS = 55 * 60  # Restart before 1-hour FiinQuantX JWT expires
-# After proactive restart, server needs ~5+ min to fully release 33 SignalR sessions.
-# Evidence: 409 Conflict persists even at T+4 min with short waits.
-_PROACTIVE_RESTART_WAIT = 360  # 6 min: give server time to clear stale sessions
+# After event.stop(), server receives proper CLOSE frames and de-registers connections
+# quickly. 90s is sufficient (vs 360s needed when close() was a no-op).
+_PROACTIVE_RESTART_WAIT = 90
 
 
 def inject_deps(pool, redis, alert_queue: asyncio.Queue):
@@ -189,14 +189,15 @@ def _stream_blocking():
 
 
 def _close_event():
-    """Close current stream event and clear references to prevent zombie threads."""
+    """Stop stream and clear references. Uses event.stop() — the only valid lifecycle method."""
     global _event, _client, _stream_connected
     _stream_connected = False
     if _event:
         try:
-            _event.close()
-        except Exception:
-            pass
+            _event.stop()
+            logger.info("FiinQuantX event stopped successfully")
+        except Exception as e:
+            logger.error(f"FiinQuantX event.stop() failed: {e}")
         _event = None
     _client = None
 
