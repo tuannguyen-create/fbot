@@ -32,13 +32,13 @@ export default function CycleDetailPage({ params }: Props) {
 
   return (
     <div className="max-w-2xl mx-auto space-y-4">
-      <Link href="/cycles" className="text-sm text-gray-500 hover:text-gray-700">← Quay lại Cycles</Link>
+      <Link href="/cycles" className="text-sm text-gray-500 hover:text-gray-700">← Quay lại Chu kỳ</Link>
 
       <div className="bg-white rounded-lg border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Cycle #{cycle.id} — {cycle.ticker}</h1>
-            <p className="text-sm text-gray-500">Breakout: {formatDateICT(cycle.breakout_date)}</p>
+            <h1 className="text-xl font-bold text-gray-900">Chu kỳ #{cycle.id} — {cycle.ticker}</h1>
+            <p className="text-sm text-gray-500">Đột phá: {formatDateICT(cycle.breakout_date)}</p>
           </div>
           <div className="flex items-center gap-2">
             <PhaseBadge phase={cycle.phase} />
@@ -66,13 +66,13 @@ export default function CycleDetailPage({ params }: Props) {
 
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div className="bg-gray-50 rounded p-3">
-            <p className="text-xs text-gray-400 uppercase mb-1">Giá breakout</p>
+            <p className="text-xs text-gray-400 uppercase mb-1">Giá đột phá</p>
             <p className="font-semibold">
-              {cycle.breakout_price ? `${cycle.breakout_price.toLocaleString()}đ` : 'N/A'}
+              {cycle.breakout_price ? `${cycle.breakout_price.toLocaleString()}đ` : 'Không có'}
             </p>
           </div>
           <div className="bg-gray-50 rounded p-3">
-            <p className="text-xs text-gray-400 uppercase mb-1">Volume đỉnh</p>
+            <p className="text-xs text-gray-400 uppercase mb-1">Khối lượng đỉnh</p>
             <p className="font-semibold">{formatVolume(cycle.peak_volume)}</p>
           </div>
           <div className="bg-gray-50 rounded p-3">
@@ -84,7 +84,7 @@ export default function CycleDetailPage({ params }: Props) {
             <p className="font-semibold text-orange-700 text-xs">
               {cycle.rewatch_window_start
                 ? `${formatDateICT(cycle.rewatch_window_start)} → ${formatDateICT(cycle.rewatch_window_end ?? cycle.rewatch_window_start)}`
-                : 'N/A'}
+                : 'Không có'}
             </p>
           </div>
           {cycle.breakout_zone_low && (
@@ -104,7 +104,7 @@ export default function CycleDetailPage({ params }: Props) {
         </div>
 
         <div className="mt-4 pt-4 border-t border-gray-100 space-y-1 text-sm text-gray-500">
-          <p>Breakout email: {cycle.breakout_email_sent ? '✅ Đã gửi' : '⏳ Chờ'}</p>
+          <p>Email đột phá: {cycle.breakout_email_sent ? '✅ Đã gửi' : '⏳ Chờ'}</p>
           <p>Cảnh báo 10 ngày: {cycle.alert_sent_10d ? '✅ Đã gửi' : '⏳ Chờ'}</p>
           <p>Tín hiệu tạo đáy: {cycle.alert_sent_bottom ? '✅ Đã gửi' : '⏳ Chờ'}</p>
         </div>

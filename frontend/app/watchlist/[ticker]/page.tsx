@@ -13,6 +13,12 @@ const GAME_TYPE_STYLES: Record<string, string> = {
   institutional:    'bg-gray-100 text-gray-600',
 }
 
+const GAME_TYPE_LABELS: Record<string, string> = {
+  speculative:      'Đầu cơ',
+  state_enterprise: 'DN nhà nước',
+  institutional:    'Tổ chức',
+}
+
 export default function TickerDetailPage({ params }: { params: Promise<{ ticker: string }> }) {
   const { ticker } = use(params)
   const queryClient = useQueryClient()
@@ -51,7 +57,7 @@ export default function TickerDetailPage({ params }: { params: Promise<{ ticker:
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
       <div className="flex items-center gap-3">
-        <Link href="/watchlist" className="text-sm text-gray-400 hover:text-gray-600">← Watchlist</Link>
+        <Link href="/watchlist" className="text-sm text-gray-400 hover:text-gray-600">← Theo dõi</Link>
       </div>
 
       <div className="flex items-start justify-between">
@@ -65,7 +71,7 @@ export default function TickerDetailPage({ params }: { params: Promise<{ ticker:
           <div className="flex items-center gap-2">
             {wlItem.game_type && (
               <span className={`inline-flex px-2 py-0.5 rounded text-xs ${GAME_TYPE_STYLES[wlItem.game_type] ?? 'bg-gray-100 text-gray-500'}`}>
-                {wlItem.game_type}
+                {GAME_TYPE_LABELS[wlItem.game_type] ?? wlItem.game_type}
               </span>
             )}
             <button
@@ -77,7 +83,7 @@ export default function TickerDetailPage({ params }: { params: Promise<{ ticker:
                   : 'bg-gray-50 border-gray-300 text-gray-500'
               }`}
             >
-              M3 {wlItem.eligible_for_m3 ? 'ON' : 'OFF'}
+              M3 {wlItem.eligible_for_m3 ? 'BẬT' : 'TẮT'}
             </button>
           </div>
         )}
@@ -101,12 +107,12 @@ export default function TickerDetailPage({ params }: { params: Promise<{ ticker:
           <h2 className="text-sm font-semibold text-gray-700">Chu kỳ hiện tại</h2>
           <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
             <div>
-              <span className="text-gray-500">Breakout: </span>
+              <span className="text-gray-500">Đột phá: </span>
               <span className="font-medium">{cycle.breakout_date ?? '—'}</span>
             </div>
             {cycle.breakout_zone_low != null && (
               <div>
-                <span className="text-gray-500">Vùng breakout: </span>
+                <span className="text-gray-500">Vùng đột phá: </span>
                 <span className="font-medium">{cycle.breakout_zone_low.toLocaleString()}{cycle.breakout_zone_high ? ` – ${cycle.breakout_zone_high.toLocaleString()}` : ''}</span>
               </div>
             )}
@@ -132,7 +138,7 @@ export default function TickerDetailPage({ params }: { params: Promise<{ ticker:
                 href={`/alerts/${cycle.source_alert_id}`}
                 className="inline-block text-xs text-orange-400 hover:underline"
               >
-                {cycle.source_alert_inferred ? 'Alert liên quan' : 'Alert nguồn'} #{cycle.source_alert_id} →
+                {cycle.source_alert_inferred ? 'Cảnh báo liên quan' : 'Cảnh báo nguồn'} #{cycle.source_alert_id} →
               </Link>
             )}
           </div>
@@ -159,7 +165,7 @@ export default function TickerDetailPage({ params }: { params: Promise<{ ticker:
             </div>
             {data.alert_history.total_30d > 0 && (
               <div className="text-gray-400 text-xs self-end">
-                ({Math.round(data.alert_history.confirmed_30d / data.alert_history.total_30d * 100)}% confirm rate)
+                ({Math.round(data.alert_history.confirmed_30d / data.alert_history.total_30d * 100)}% tỷ lệ xác nhận)
               </div>
             )}
           </div>
