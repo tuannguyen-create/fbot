@@ -4,10 +4,10 @@ import { usePathname } from 'next/navigation'
 import { StreamStatusBadge } from './StreamStatusBadge'
 
 const navItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: '📊' },
-  { href: '/alerts', label: 'Alerts', icon: '🔔' },
+  { href: '/dashboard', label: 'Tổng quan', icon: '📊' },
+  { href: '/alerts', label: 'Cảnh báo', icon: '🔔' },
   { href: '/cycles', label: 'Chu kỳ', icon: '📈' },
-  { href: '/watchlist', label: 'Watchlist', icon: '📋' },
+  { href: '/watchlist', label: 'Theo dõi', icon: '📋' },
   { href: '/settings', label: 'Cài đặt', icon: '⚙️' },
 ]
 
@@ -20,7 +20,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <aside className="hidden md:flex flex-col w-56 bg-white border-r border-gray-200 fixed inset-y-0 left-0 z-30">
         <div className="p-4 border-b border-gray-200">
           <h1 className="text-xl font-bold text-gray-900">fbot</h1>
-          <p className="text-xs text-gray-400">VN Stock Alerts</p>
+          <p className="text-xs text-gray-400">Cảnh báo chứng khoán</p>
         </div>
         <nav className="flex-1 p-3 space-y-1">
           {navItems.map((item) => {

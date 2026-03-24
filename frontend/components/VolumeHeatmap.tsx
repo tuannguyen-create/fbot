@@ -38,7 +38,7 @@ export function VolumeHeatmap() {
               key={ticker}
               href={`/watchlist`}
               className={`px-2 py-1 rounded text-xs font-medium ${colorClass} hover:opacity-80 transition-opacity`}
-              title={`${ticker}: ${alerts} alert${alerts !== 1 ? 's' : ''} hôm nay`}
+              title={`${ticker}: ${alerts} cảnh báo hôm nay`}
             >
               {ticker}
               {alerts > 0 && <span className="ml-1 font-bold">{alerts}</span>}
@@ -47,9 +47,9 @@ export function VolumeHeatmap() {
         })}
       </div>
       <p className="text-xs text-gray-400 mt-2">
-        Màu: <span className="text-yellow-600">■</span> 1 alert &nbsp;
-        <span className="text-orange-500">■</span> 2 alerts &nbsp;
-        <span className="text-red-500">■</span> 3+ alerts
+        Màu: <span className="text-yellow-600">■</span> 1 cảnh báo &nbsp;
+        <span className="text-orange-500">■</span> 2 cảnh báo &nbsp;
+        <span className="text-red-500">■</span> 3+ cảnh báo
       </p>
     </div>
   )

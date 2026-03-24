@@ -39,8 +39,8 @@ export function LiveAlertFeed() {
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-100 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-700">Real-time Alerts</h3>
-        <span className="text-xs text-gray-400">{alerts.length} alerts</span>
+        <h3 className="text-sm font-semibold text-gray-700">Cảnh báo thực tế</h3>
+        <span className="text-xs text-gray-400">{alerts.length} cảnh báo</span>
       </div>
       <div className="divide-y divide-gray-50 max-h-80 overflow-y-auto">
         {alerts.map((alert) => (
@@ -54,7 +54,7 @@ export function LiveAlertFeed() {
             <div className="flex-shrink-0">
               <span className="font-bold text-sm text-gray-900">{alert.ticker}</span>
               {alert.in_magic_window && (
-                <span className="ml-1 text-yellow-500 text-xs" title="Magic Window">⚡</span>
+                <span className="ml-1 text-yellow-500 text-xs" title="Cửa sổ vàng">⚡</span>
               )}
             </div>
             <div className="flex-1 min-w-0">

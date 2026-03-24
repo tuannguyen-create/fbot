@@ -46,13 +46,13 @@ function AlertsContent() {
 
   return (
     <div className="space-y-4 max-w-5xl mx-auto">
-      <h1 className="text-xl font-bold text-gray-900">Alert Feed</h1>
+      <h1 className="text-xl font-bold text-gray-900">Cảnh báo khối lượng</h1>
 
       {/* Filters */}
       <div className="bg-white rounded-lg border border-gray-200 p-3 flex flex-wrap gap-2 items-center">
         <input
           type="text"
-          placeholder="Ticker (HPG, VCB...)"
+          placeholder="Mã (HPG, VCB...)"
           value={ticker}
           onChange={(e) => updateFilter('ticker', e.target.value.toUpperCase())}
           className="border border-gray-300 rounded px-2 py-1 text-sm w-32"
@@ -73,7 +73,7 @@ function AlertsContent() {
             checked={magicOnly}
             onChange={(e) => updateFilter('magic_only', e.target.checked ? 'true' : '')}
           />
-          Magic Window only
+          Chỉ cửa sổ vàng
         </label>
         <span className="text-xs text-gray-400 ml-auto">
           {total} kết quả
@@ -97,7 +97,7 @@ function AlertsContent() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Ticker</th>
+                  <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Mã</th>
                   <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Thời gian</th>
                   <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">Khối lượng</th>
                   <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">Tỷ lệ</th>
@@ -111,7 +111,7 @@ function AlertsContent() {
                     <td className="px-4 py-2">
                       <Link href={`/alerts/${a.id}`} className="font-semibold text-gray-900 hover:text-orange-600">
                         {a.ticker}
-                        {a.in_magic_window && <span className="ml-1 text-yellow-500" title="Magic Window">⚡</span>}
+                        {a.in_magic_window && <span className="ml-1 text-yellow-500" title="Cửa sổ vàng">⚡</span>}
                       </Link>
                     </td>
                     <td className="px-4 py-2 text-gray-500">{formatDateTimeICT(a.fired_at)}</td>

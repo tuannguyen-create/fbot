@@ -10,6 +10,12 @@ const GAME_TYPE_STYLES: Record<string, string> = {
   institutional:    'bg-gray-100 text-gray-600',
 }
 
+const GAME_TYPE_LABELS: Record<string, string> = {
+  speculative:      'Đầu cơ',
+  state_enterprise: 'DN nhà nước',
+  institutional:    'Tổ chức',
+}
+
 export default function WatchlistPage() {
   const [search, setSearch] = useState('')
   const [vn30Only, setVn30Only] = useState(false)
@@ -35,7 +41,7 @@ export default function WatchlistPage() {
   return (
     <div className="space-y-4 max-w-4xl mx-auto">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-gray-900">Watchlist</h1>
+        <h1 className="text-xl font-bold text-gray-900">Danh sách theo dõi</h1>
         <span className="text-sm text-gray-500">{data?.tickers.length ?? 0} mã</span>
       </div>
 
@@ -49,7 +55,7 @@ export default function WatchlistPage() {
         />
         <label className="flex items-center gap-1.5 text-sm text-gray-600">
           <input type="checkbox" checked={vn30Only} onChange={(e) => setVn30Only(e.target.checked)} />
-          VN30 only
+          Chỉ VN30
         </label>
       </div>
 
@@ -58,10 +64,10 @@ export default function WatchlistPage() {
       ) : (
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
           <div className="hidden md:grid grid-cols-5 gap-3 px-4 py-2 bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 uppercase">
-            <span>Ticker</span>
+            <span>Mã</span>
             <span>Công ty</span>
             <span className="text-center">Loại</span>
-            <span className="text-center">Game</span>
+            <span className="text-center">Nhóm</span>
             <span className="text-center">M3</span>
           </div>
           <div className="divide-y divide-gray-100">
@@ -81,7 +87,7 @@ export default function WatchlistPage() {
                 <span className="text-center">
                   {t.game_type ? (
                     <span className={`inline-flex px-2 py-0.5 rounded text-xs ${GAME_TYPE_STYLES[t.game_type] ?? 'bg-gray-100 text-gray-500'}`}>
-                      {t.game_type}
+                      {GAME_TYPE_LABELS[t.game_type] ?? t.game_type}
                     </span>
                   ) : '—'}
                 </span>

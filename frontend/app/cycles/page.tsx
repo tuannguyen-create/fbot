@@ -21,7 +21,7 @@ export default function CyclesPage() {
   return (
     <div className="space-y-4 max-w-3xl mx-auto">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-gray-900">Cycle Tracker</h1>
+        <h1 className="text-xl font-bold text-gray-900">Theo dõi chu kỳ</h1>
         <select
           value={phase}
           onChange={(e) => setPhase(e.target.value)}
@@ -61,7 +61,7 @@ export default function CyclesPage() {
                   )}
                 </div>
                 <div className="text-xs text-gray-400">
-                  Breakout: {formatDateICT(c.breakout_date)}
+                  Đột phá: {formatDateICT(c.breakout_date)}
                 </div>
               </div>
 

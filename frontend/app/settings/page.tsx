@@ -55,8 +55,8 @@ export default function SettingsPage() {
         <div className="space-y-3">
           {[
             { key: 'threshold_normal' as const, label: 'Ngưỡng thông thường', desc: 'KL / Baseline 5 ngày' },
-            { key: 'threshold_magic' as const, label: 'Ngưỡng Magic Window', desc: '9:00-9:30, 11:00-11:30, 13:00-13:30' },
-            { key: 'threshold_confirm_15m' as const, label: 'Ngưỡng xác nhận 15 phút', desc: 'Cumulative 15-min ratio' },
+            { key: 'threshold_magic' as const, label: 'Ngưỡng cửa sổ vàng', desc: '9:00-9:30, 11:00-11:30, 13:00-13:30' },
+            { key: 'threshold_confirm_15m' as const, label: 'Ngưỡng xác nhận 15 phút', desc: 'Tỷ lệ tích lũy 15 phút' },
           ].map(({ key, label, desc }) => (
             <div key={key}>
               <label className="text-sm font-medium text-gray-700">{label}</label>
@@ -71,7 +71,7 @@ export default function SettingsPage() {
                   onChange={(e) => setThresholds((prev) => ({ ...prev, [key]: parseFloat(e.target.value) }))}
                   className="border border-gray-300 rounded px-2 py-1 text-sm w-20"
                 />
-                <span className="text-sm text-gray-500">x baseline</span>
+                <span className="text-sm text-gray-500">x cơ sở</span>
               </div>
             </div>
           ))}
@@ -99,9 +99,19 @@ export default function SettingsPage() {
         </div>
         {health ? (
           <div className="space-y-2 text-sm">
-            <StatusRow label="Database (PostgreSQL)" status={health.db === 'ok'} />
-            <StatusRow label="Redis Cache" status={health.redis === 'ok' ? true : health.redis === 'disabled' ? 'neutral' : false} />
-            <StatusRow label="FiinQuantX Stream" status={health.stream === 'connected'} />
+            <StatusRow label="Cơ sở dữ liệu (PostgreSQL)" status={health.db === 'ok'} />
+            <StatusRow label="Bộ nhớ đệm Redis" status={health.redis === 'ok' ? true : health.redis === 'disabled' ? 'neutral' : false} neutralLabel="— Tắt" />
+            <StatusRow
+              label="Luồng FiinQuantX"
+              status={health.stream === 'connected' ? true : health.stream_reason === 'outside_hours' ? 'neutral' : false}
+              statusLabel={
+                health.stream === 'connected' ? '✅ Kết nối' :
+                health.stream_reason === 'outside_hours' ? '— Ngoài giờ' :
+                health.stream_reason === 'connecting' ? '⏳ Đang kết nối...' :
+                health.stream_reason === 'reconnecting' ? '⏳ Kết nối lại...' :
+                '❌ Lỗi kết nối'
+              }
+            />
           </div>
         ) : (
           <p className="text-sm text-gray-400">Đang kiểm tra...</p>
@@ -110,19 +120,20 @@ export default function SettingsPage() {
 
       {/* Info */}
       <div className="bg-gray-50 rounded-lg border border-gray-200 p-4 text-sm text-gray-500">
-        <p>Watchlist: <b>{settings?.watchlist_count ?? 33}</b> mã (VN30 + NVL/PDR/KBC)</p>
-        <p className="mt-1">Stream: <b>{settings?.stream_status}</b></p>
+        <p>Theo dõi: <b>{settings?.watchlist_count ?? 33}</b> mã (VN30 + NVL/PDR/KBC)</p>
+        <p className="mt-1">Luồng: <b>{settings?.stream_status === 'connected' ? 'Kết nối' : 'Mất kết nối'}</b></p>
       </div>
     </div>
   )
 }
 
-function StatusRow({ label, status }: { label: string; status: boolean | 'neutral' }) {
+function StatusRow({ label, status, statusLabel, neutralLabel }: { label: string; status: boolean | 'neutral'; statusLabel?: string; neutralLabel?: string }) {
+  const defaultLabel = status === true ? '✅ Tốt' : status === 'neutral' ? (neutralLabel ?? '— Tắt') : '❌ Lỗi'
   return (
     <div className="flex items-center justify-between">
       <span className="text-gray-600">{label}</span>
       <span className={status === true ? 'text-green-600' : status === 'neutral' ? 'text-gray-400' : 'text-red-600'}>
-        {status === true ? '✅ OK' : status === 'neutral' ? '— Tắt' : '❌ Lỗi'}
+        {statusLabel ?? defaultLabel}
       </span>
     </div>
   )
