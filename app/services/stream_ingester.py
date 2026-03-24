@@ -21,10 +21,13 @@ _event = None
 _client = None
 _watchdog_task: Optional[asyncio.Task] = None
 
-BACKOFF_BASE = 60           # Give server 60s to clean up stale sessions before retry
+BACKOFF_BASE = 60           # Minimum wait before reconnect (unplanned crash)
 BACKOFF_MAX = 300           # 5 min max between retries
 _STALE_MINUTES = 10         # Watchdog threshold: no data for N min during trading hours
 _PROACTIVE_RESTART_SECS = 55 * 60  # Restart before 1-hour FiinQuantX JWT expires
+# After proactive restart, server needs ~5+ min to fully release 33 SignalR sessions.
+# Evidence: 409 Conflict persists even at T+4 min with short waits.
+_PROACTIVE_RESTART_WAIT = 360  # 6 min: give server time to clear stale sessions
 
 
 def inject_deps(pool, redis, alert_queue: asyncio.Queue):
@@ -272,7 +275,7 @@ async def start():
         # Planned restart (proactive JWT refresh): wait for server to clean up stale sessions
         if elapsed > _PROACTIVE_RESTART_SECS - 60:
             attempt = 0
-            wait = BACKOFF_BASE
+            wait = _PROACTIVE_RESTART_WAIT
         # Unplanned crash but session ran > 5 min: quick reconnect, reset penalty
         elif elapsed > 300:
             attempt = 0
