@@ -43,6 +43,29 @@ def get_status() -> str:
     return "connected" if _stream_connected else "disconnected"
 
 
+def get_detailed_status() -> dict:
+    """Return stream status with reason and last_bar_time for rich UI display."""
+    from zoneinfo import ZoneInfo
+    from app.utils.trading_hours import is_trading_hours, is_trading_day
+
+    last_iso = _last_bar_time.isoformat() if _last_bar_time else None
+
+    if _stream_connected:
+        return {"status": "connected", "reason": None, "last_bar_time": last_iso}
+
+    now_utc = datetime.now(timezone.utc)
+    now_ict = now_utc.astimezone(ZoneInfo("Asia/Ho_Chi_Minh"))
+
+    if not is_trading_day(now_ict.date()) or not is_trading_hours(now_ict.time()):
+        reason = "outside_hours"
+    elif _last_bar_time is None or (now_utc - _last_bar_time).total_seconds() < 300:
+        reason = "reconnecting"
+    else:
+        reason = "error"
+
+    return {"status": "disconnected", "reason": reason, "last_bar_time": last_iso}
+
+
 def get_last_bar_time() -> Optional[datetime]:
     return _last_bar_time
 

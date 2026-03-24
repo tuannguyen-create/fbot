@@ -22,6 +22,7 @@ export interface CycleSummary {
   breakout_zone_high: number | null
   /** @deprecated use rewatch_window_start instead */
   predicted_bottom_date: string | null
+  source_alert_id: number | null
 }
 
 export interface CycleDetail extends CycleSummary {

@@ -2,7 +2,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { alertsApi } from '@/lib/api'
 import { AlertStatusBadge } from '@/components/AlertStatusBadge'
-import { formatDateTimeICT, formatVolume, formatRatio, formatPct, slotToTimeStr } from '@/lib/formatters'
+import { formatAlertTime, formatDateTimeICT, formatVolume, formatRatio, formatPct, slotToTimeStr } from '@/lib/formatters'
 import Link from 'next/link'
 
 interface Props {
@@ -39,15 +39,21 @@ export default function AlertDetailPage({ params }: Props) {
             <h1 className="text-xl font-bold text-gray-900">
               Alert #{alert.id} — {alert.ticker}
             </h1>
-            <p className="text-sm text-gray-500">{formatDateTimeICT(alert.fired_at)}</p>
+            <p className="text-sm text-gray-500">
+              Phiên GD: <span className="font-medium text-gray-700">
+                {alert.bar_time ? formatAlertTime(alert.bar_time) : slotToTimeStr(alert.slot)} ICT
+              </span>
+              <span className="mx-2 text-gray-300">·</span>
+              Ghi nhận: {formatDateTimeICT(alert.fired_at)}
+            </p>
           </div>
           <AlertStatusBadge status={alert.status} />
         </div>
 
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div className="bg-gray-50 rounded p-3">
-            <p className="text-xs text-gray-400 uppercase mb-1">Thời điểm</p>
-            <p className="font-semibold">{slotToTimeStr(alert.slot)} ICT</p>
+            <p className="text-xs text-gray-400 uppercase mb-1">Phiên GD</p>
+            <p className="font-semibold">{alert.bar_time ? formatAlertTime(alert.bar_time) : slotToTimeStr(alert.slot)} ICT</p>
           </div>
           <div className="bg-gray-50 rounded p-3">
             <p className="text-xs text-gray-400 uppercase mb-1">Magic Window</p>

@@ -30,5 +30,7 @@ export interface HealthStatus {
   db: 'ok' | 'error'
   redis: 'ok' | 'error' | 'disabled'
   stream: 'connected' | 'disconnected'
+  stream_reason: 'outside_hours' | 'reconnecting' | 'error' | null
+  last_bar_time: string | null
   timestamp: string
 }
