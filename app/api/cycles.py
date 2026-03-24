@@ -42,11 +42,9 @@ async def list_cycles(
             f"""
             SELECT id, ticker, breakout_date, phase, days_remaining,
                    predicted_bottom_date, trading_days_elapsed, estimated_dist_days,
-                   peak_volume, breakout_price, alert_sent_10d, alert_sent_bottom,
                    game_type, rewatch_window_start, rewatch_window_end,
                    phase_reason, invalidation_reason,
-                   breakout_zone_low, breakout_zone_high,
-                   created_at, updated_at
+                   breakout_zone_low, breakout_zone_high
             FROM cycle_events {where}
             ORDER BY created_at DESC
             LIMIT ${idx} OFFSET ${idx+1}
