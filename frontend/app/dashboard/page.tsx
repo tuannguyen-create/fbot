@@ -18,7 +18,7 @@ export default function DashboardPage() {
 
   const { data: cyclesData } = useQuery({
     queryKey: ['cycles', 'active'],
-    queryFn: () => cyclesApi.list({ phase: 'distributing,bottoming', limit: 5 }),
+    queryFn: () => cyclesApi.list({ phase: 'distribution_in_progress,bottoming_candidate', limit: 5 }),
     refetchInterval: 60_000,
   })
 
@@ -106,9 +106,10 @@ export default function DashboardPage() {
                   total={c.estimated_dist_days ?? 20}
                   phase={c.phase}
                 />
-                {c.predicted_bottom_date && (
+                {c.rewatch_window_start && (
                   <p className="text-xs text-gray-400 mt-1">
-                    Đáy dự kiến: {formatDateICT(c.predicted_bottom_date)}
+                    Cửa sổ quan sát: {formatDateICT(c.rewatch_window_start)}
+                    {c.rewatch_window_end && ` → ${formatDateICT(c.rewatch_window_end)}`}
                     {c.days_remaining != null && ` (còn ${c.days_remaining} ngày)`}
                   </p>
                 )}
