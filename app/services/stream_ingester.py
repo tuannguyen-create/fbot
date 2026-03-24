@@ -17,6 +17,7 @@ _loop = None  # event loop captured in async context for thread-safe coroutine s
 # Stream state
 _stream_connected = False
 _last_bar_time: Optional[datetime] = None
+_startup_at: Optional[datetime] = None   # set when start() is called
 _event = None
 _client = None
 _watchdog_task: Optional[asyncio.Task] = None
@@ -25,6 +26,7 @@ BACKOFF_BASE = 60           # Minimum wait before reconnect (unplanned crash)
 BACKOFF_MAX = 300           # 5 min max between retries
 _STALE_MINUTES = 10         # Watchdog threshold: no data for N min during trading hours
 _PROACTIVE_RESTART_SECS = 55 * 60  # Restart before 1-hour FiinQuantX JWT expires
+_CONNECT_TIMEOUT_SECS = 120  # After this, "never connected during trading hours" = error
 # After event.stop(), server receives proper CLOSE frames and de-registers connections
 # quickly. 90s is sufficient (vs 360s needed when close() was a no-op).
 _PROACTIVE_RESTART_WAIT = 90
@@ -58,9 +60,15 @@ def get_detailed_status() -> dict:
 
     if not is_trading_day(now_ict.date()) or not is_trading_hours(now_ict.time()):
         reason = "outside_hours"
-    elif _last_bar_time is None or (now_utc - _last_bar_time).total_seconds() < 300:
+    elif _last_bar_time is None:
+        # Never received a bar — still in initial connect window or already failed
+        elapsed_startup = (now_utc - _startup_at).total_seconds() if _startup_at else 9999
+        reason = "connecting" if elapsed_startup < _CONNECT_TIMEOUT_SECS else "error"
+    elif (now_utc - _last_bar_time).total_seconds() < 300:
+        # Had data recently — temporary disconnect, expect recovery
         reason = "reconnecting"
     else:
+        # Stale for >5 min during trading hours — real error
         reason = "error"
 
     return {"status": "disconnected", "reason": reason, "last_bar_time": last_iso}
@@ -268,8 +276,9 @@ async def _proactive_restart_timer():
 
 async def start():
     """Start stream with infinite retry. Non-blocking (runs in thread executor)."""
-    global _stream_connected, _loop, _watchdog_task
+    global _stream_connected, _loop, _watchdog_task, _startup_at
     _loop = asyncio.get_running_loop()
+    _startup_at = datetime.now(timezone.utc)
 
     _watchdog_task = asyncio.create_task(_watchdog())
 

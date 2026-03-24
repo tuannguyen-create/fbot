@@ -150,8 +150,8 @@ class TestBuPctCalculation:
 
         # Verify fetchrow was called with correct bu_pct = 80.0
         call_args = conn.fetchrow.call_args
-        # bu_pct is the 6th positional arg in the INSERT (0=sql, 1=ticker, 2=slot, 3=vol, 4=avg5d, 5=ratio, 6=bu_pct)
-        bu_pct_passed = call_args[0][6]
+        # INSERT args: 0=sql, 1=ticker, 2=slot, 3=bar_time, 4=vol, 5=avg5d, 6=ratio, 7=bu_pct
+        bu_pct_passed = call_args[0][7]
         assert abs(bu_pct_passed - 80.0) < 0.01
 
     @pytest.mark.asyncio
@@ -171,7 +171,8 @@ class TestBuPctCalculation:
             await alert_engine_m1.process(bar)  # should not raise
 
         call_args = conn.fetchrow.call_args
-        bu_pct_passed = call_args[0][6]
+        # INSERT args: 0=sql, 1=ticker, 2=slot, 3=bar_time, 4=vol, 5=avg5d, 6=ratio, 7=bu_pct
+        bu_pct_passed = call_args[0][7]
         assert bu_pct_passed is None
 
 

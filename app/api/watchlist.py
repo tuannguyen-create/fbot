@@ -110,7 +110,7 @@ async def get_ticker_summary(ticker: str, pool: asyncpg.Pool = Depends(get_db)):
             """
             SELECT COUNT(*) FROM volume_alerts
             WHERE ticker=$1
-              AND DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh') = CURRENT_DATE AT TIME ZONE 'Asia/Ho_Chi_Minh'
+              AND DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') = CURRENT_DATE AT TIME ZONE 'Asia/Ho_Chi_Minh'
             """,
             ticker,
         )
@@ -138,7 +138,7 @@ async def get_ticker_summary(ticker: str, pool: asyncpg.Pool = Depends(get_db)):
               COUNT(*) FILTER (WHERE status = 'confirmed') AS confirmed_30d
             FROM volume_alerts
             WHERE ticker=$1
-              AND fired_at >= NOW() - INTERVAL '30 days'
+              AND bar_time >= NOW() - INTERVAL '30 days'
             """,
             ticker,
         )
@@ -147,7 +147,7 @@ async def get_ticker_summary(ticker: str, pool: asyncpg.Pool = Depends(get_db)):
             SELECT id, bar_time, fired_at, slot, ratio_5d, status, in_magic_window
             FROM volume_alerts
             WHERE ticker=$1
-            ORDER BY fired_at DESC LIMIT 5
+            ORDER BY bar_time DESC LIMIT 5
             """,
             ticker,
         )

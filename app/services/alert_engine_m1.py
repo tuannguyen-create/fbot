@@ -98,7 +98,7 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
                     (ticker, slot, bar_time, volume, baseline_5d, ratio_5d, bu_pct, foreign_net,
                      in_magic_window, status)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'fired')
-                ON CONFLICT (ticker, slot, (DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')))
+                ON CONFLICT (ticker, slot, (DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')))
                 DO NOTHING
                 RETURNING id, fired_at
                 """,

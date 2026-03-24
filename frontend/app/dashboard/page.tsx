@@ -80,6 +80,7 @@ export default function DashboardPage() {
             !health ? '—' :
             health.stream === 'connected' ? 'Kết nối' :
             health.stream_reason === 'outside_hours' ? 'Ngoài giờ' :
+            health.stream_reason === 'connecting' ? 'Đang kết nối...' :
             health.stream_reason === 'reconnecting' ? 'Kết nối lại...' :
             health.stream_reason === 'error' ? 'Lỗi kết nối' :
             'Mất kết nối'
@@ -88,6 +89,7 @@ export default function DashboardPage() {
             !health ? 'default' :
             health.stream === 'connected' ? 'success' :
             health.stream_reason === 'outside_hours' ? 'default' :
+            health.stream_reason === 'connecting' ? 'warning' :
             health.stream_reason === 'reconnecting' ? 'warning' :
             'danger'
           }

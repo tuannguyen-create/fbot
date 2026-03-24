@@ -194,7 +194,7 @@ async def _analyze_ticker(ticker: str):
                     """
                     SELECT id FROM volume_alerts
                     WHERE ticker=$1
-                      AND DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh') = $2
+                      AND DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') = $2
                     ORDER BY ratio_5d DESC NULLS LAST
                     LIMIT 1
                     """,
@@ -248,7 +248,7 @@ async def _create_cycle(
             row = await conn.fetchrow(
                 """SELECT id FROM volume_alerts
                    WHERE ticker=$1
-                     AND DATE(fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh') = $2
+                     AND DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') = $2
                    ORDER BY ratio_5d DESC NULLS LAST LIMIT 1""",
                 ticker, breakout_date,
             )
