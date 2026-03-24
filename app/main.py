@@ -172,13 +172,14 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 
 # --- Routers ---
-from app.api import alerts, cycles, watchlist, settings, stream
+from app.api import alerts, cycles, watchlist, settings, stream, admin
 
 app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["alerts"])
 app.include_router(cycles.router, prefix="/api/v1/cycles", tags=["cycles"])
 app.include_router(watchlist.router, prefix="/api/v1/watchlist", tags=["watchlist"])
 app.include_router(settings.router, prefix="/api/v1/settings", tags=["settings"])
 app.include_router(stream.router, prefix="/api/v1/stream", tags=["stream"])
+app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 
 
 @app.get("/api/v1/health")
