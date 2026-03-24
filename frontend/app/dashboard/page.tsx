@@ -44,8 +44,11 @@ export default function DashboardPage() {
             <span className={health.db === 'ok' ? 'text-green-600' : 'text-red-600'}>
               DB {health.db === 'ok' ? '✅' : '❌'}
             </span>
-            <span className={health.redis === 'ok' ? 'text-green-600' : 'text-red-600'}>
-              Redis {health.redis === 'ok' ? '✅' : '❌'}
+            <span className={
+              health.redis === 'ok' ? 'text-green-600' :
+              health.redis === 'disabled' ? 'text-gray-400' : 'text-red-600'
+            }>
+              Redis {health.redis === 'ok' ? '✅' : health.redis === 'disabled' ? '—' : '❌'}
             </span>
           </div>
         )}
