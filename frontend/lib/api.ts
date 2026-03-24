@@ -64,6 +64,11 @@ export const watchlistApi = {
       today_alerts: number
       active_cycle: CycleSummary | null
     }>(`/api/v1/watchlist/${ticker}/summary`),
+  updateM3: (ticker: string, body: { eligible_for_m3?: boolean; game_type?: string }) =>
+    apiFetch<{ ticker: string; eligible_for_m3?: boolean; game_type?: string }>(
+      `/api/v1/watchlist/${ticker}/m3`,
+      { method: 'PATCH', body: JSON.stringify(body) }
+    ),
 }
 
 // ---- Settings ----

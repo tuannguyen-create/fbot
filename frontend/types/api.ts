@@ -11,6 +11,8 @@ export interface WatchlistItem {
   sector: string | null
   in_vn30: boolean
   active: boolean
+  eligible_for_m3: boolean
+  game_type: string | null
 }
 
 export interface AppSettings {
