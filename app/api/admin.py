@@ -1,5 +1,6 @@
 """Admin endpoints — read-only diagnostic tools."""
 import asyncio
+import logging
 from collections import defaultdict
 from datetime import date
 from statistics import mean
@@ -14,11 +15,23 @@ from app.services.daily_ohlcv_service import _fetch_historical_blocking
 from app.utils.trading_hours import get_prev_trading_days, is_trading_day
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 async def _require_admin_key(x_admin_key: Optional[str] = Header(None)):
-    """Auth guard: if ADMIN_API_KEY is set in config, require matching header."""
-    if settings.ADMIN_API_KEY and x_admin_key != settings.ADMIN_API_KEY:
+    """Auth guard: require X-Admin-Key header when ADMIN_API_KEY is configured.
+
+    Empty ADMIN_API_KEY (default) = open access. Intentional for local dev.
+    Production deployments MUST set ADMIN_API_KEY in .env to secure this endpoint.
+    """
+    if not settings.ADMIN_API_KEY:
+        if not settings.IS_DEV:
+            logger.warning(
+                "ADMIN_API_KEY is not set — /admin endpoints are open. "
+                "Set ADMIN_API_KEY in production .env to restrict access."
+            )
+        return
+    if x_admin_key != settings.ADMIN_API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -56,7 +69,26 @@ async def scan_history(
             scan_start,
         )
 
-    eligible_tickers = [r["ticker"] for r in wl_rows] if wl_rows else settings.WATCHLIST
+    if not wl_rows:
+        return {
+            "success": True,
+            "data": {
+                "breakout_candidates": [],
+                "total": 0,
+                "tickers_scanned": 0,
+                "tickers_with_data": 0,
+                "tickers_no_data": [],
+                "days_scanned": days,
+                "scan_from": str(scan_start),
+                "note": "No tickers have eligible_for_m3 = TRUE",
+                "thresholds": {
+                    "vol_mult": settings.BREAKOUT_VOL_MULT,
+                    "price_pct": settings.BREAKOUT_PRICE_PCT,
+                },
+            },
+        }
+
+    eligible_tickers = [r["ticker"] for r in wl_rows]
 
     existing_map = {
         (r["ticker"], r["breakout_date"]): {"id": r["id"], "phase": r["phase"]}
