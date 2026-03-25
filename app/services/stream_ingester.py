@@ -61,8 +61,18 @@ _last_m1_check: dict = {}
 _M1_CHECK_INTERVAL = 15  # seconds between mid-minute M1 calls
 
 # Stop signal: threading.Event set by _close_event() to unblock _stream_blocking().
-# Replaces polling the private _event._stop attribute (Fix 5).
+# Replaces polling the private _event._stop attribute.
 _stream_stop_event = _threading.Event()
+
+# _shutting_down: set True by _close_event() before flush, checked in _on_tick_raw().
+# Gates the thread callback so no new ticks mutate _tick_bars during shutdown/flush,
+# eliminating the race between the tick thread and the asyncio flush+reset path.
+_shutting_down: bool = False
+
+# _session_confirmed: set True only after the first tick of the current session.
+# Keeps get_detailed_status() from reporting "connected" during the silent window
+# between _event.start() and the first tick arriving.
+_session_confirmed: bool = False
 
 
 def inject_deps(pool, redis, alert_queue: asyncio.Queue):
@@ -74,7 +84,7 @@ def inject_deps(pool, redis, alert_queue: asyncio.Queue):
 
 
 def get_status() -> str:
-    return "connected" if _stream_connected else "disconnected"
+    return "connected" if (_stream_connected and _session_confirmed) else "disconnected"
 
 
 def _current_session_open_utc(now_ict) -> Optional[datetime]:
@@ -93,7 +103,10 @@ def get_detailed_status() -> dict:
 
     last_iso = _last_bar_time.isoformat() if _last_bar_time else None
 
-    if _stream_connected:
+    # Only report "connected" after at least one tick of the current session is received.
+    # _stream_connected=True but _session_confirmed=False means the process started the
+    # stream but no data has arrived yet — that's "connecting", not "connected".
+    if _stream_connected and _session_confirmed:
         return {"status": "connected", "reason": None, "last_bar_time": last_iso}
 
     now_utc = datetime.now(timezone.utc)
@@ -243,7 +256,12 @@ def _accumulate_tick(d: dict) -> tuple[Optional[dict], Optional[dict]]:
 
 def _on_tick_raw(data):
     """Trading_Data_Stream callback — called from stream thread per matched trade."""
-    global _last_bar_time
+    global _last_bar_time, _session_confirmed
+
+    # Race gate: _close_event() sets _shutting_down=True before flushing _tick_bars.
+    # Returning here ensures no new ticks mutate the accumulator during shutdown/flush.
+    if _shutting_down:
+        return
 
     try:
         d = data.to_dict()
@@ -253,6 +271,10 @@ def _on_tick_raw(data):
     ticker = (d.get("Ticker") or "").upper()
     if ticker not in _WATCHLIST_SET:
         return
+
+    # Mark session as confirmed on the first valid watchlist tick.
+    if not _session_confirmed:
+        _session_confirmed = True
 
     completed, partial = _accumulate_tick(d)
 
@@ -396,11 +418,11 @@ def _reset_tick_state():
 
 def _stream_blocking():
     """Run blocking FiinQuantX tick stream. Called in thread executor."""
-    global _stream_connected, _event, _client
+    global _stream_connected, _event, _client, _shutting_down
     import FiinQuantX as fq
 
-    # Fix 5: reset our stop signal so this attempt can block correctly
     _stream_stop_event.clear()
+    _shutting_down = False  # open tick gate for new session
 
     _client = fq.FiinSession(
         username=settings.FIINQUANT_USERNAME,
@@ -424,11 +446,13 @@ def _stream_blocking():
 
 async def _close_event():
     """Stop tick stream without blocking event loop."""
-    global _event, _client, _stream_connected
+    global _event, _client, _stream_connected, _shutting_down, _session_confirmed
     _stream_connected = False
-    _stream_stop_event.set()   # Fix 5: unblock _stream_blocking()
-    await _flush_all_bars()    # Fix 3: persist current minute's data before clearing
-    _reset_tick_state()        # Fix 3: clear stale accumulator state across reconnects
+    _session_confirmed = False  # reset: next session must re-confirm with a live tick
+    _shutting_down = True       # gate tick callback before flushing (eliminates race)
+    _stream_stop_event.set()    # unblock _stream_blocking()
+    await _flush_all_bars()    # persist current minute's data before clearing
+    _reset_tick_state()        # clear stale accumulator state across reconnects
     if _event:
         event_ref, _event = _event, None
         try:

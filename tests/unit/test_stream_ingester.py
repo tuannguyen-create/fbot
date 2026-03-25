@@ -11,14 +11,21 @@ from app.services import stream_ingester
 
 @pytest.fixture(autouse=True)
 def reset_ingester_state():
-    """Reset all module-level tick state between tests."""
+    """Reset all module-level tick/session state between tests."""
     with stream_ingester._tick_lock:
         stream_ingester._tick_bars.clear()
     stream_ingester._last_m1_check.clear()
+    stream_ingester._shutting_down = False
+    stream_ingester._session_confirmed = False
+    stream_ingester._stream_connected = False
+    stream_ingester._last_bar_time = None
     yield
     with stream_ingester._tick_lock:
         stream_ingester._tick_bars.clear()
     stream_ingester._last_m1_check.clear()
+    stream_ingester._shutting_down = False
+    stream_ingester._session_confirmed = False
+    stream_ingester._stream_connected = False
 
 
 def _tick(ticker="HPG", ts="2026-03-25T09:15:10", match_vol=1000,
@@ -248,3 +255,101 @@ class TestResetTickState:
 
         assert len(stream_ingester._tick_bars) == 0
         assert len(stream_ingester._last_m1_check) == 0
+
+
+# ── Shutdown race gate (_shutting_down) ────────────────────────────────────
+
+class TestShuttingDownGate:
+    def test_on_tick_raw_ignored_when_shutting_down(self):
+        """_on_tick_raw must not modify _tick_bars when _shutting_down=True."""
+        stream_ingester._shutting_down = True
+
+        class FakeData:
+            def to_dict(self):
+                return {
+                    "Ticker": "HPG",
+                    "Timestamp": "2026-03-25T09:15:10",
+                    "MatchVolume": 1000,
+                    "Bu": 800, "Sd": 200, "Close": 25000.0,
+                    "ForeignBuyVolumeTotal": 100, "ForeignSellVolumeTotal": 50,
+                }
+
+        stream_ingester._on_tick_raw(FakeData())
+
+        # No tick should have been accumulated
+        assert len(stream_ingester._tick_bars) == 0
+
+    def test_on_tick_raw_processes_when_not_shutting_down(self):
+        """_on_tick_raw processes normally when _shutting_down=False."""
+        stream_ingester._shutting_down = False
+        stream_ingester._loop = None  # prevent run_coroutine_threadsafe
+
+        class FakeData:
+            def to_dict(self):
+                return {
+                    "Ticker": "HPG",
+                    "Timestamp": "2026-03-25T09:15:10",
+                    "MatchVolume": 1000,
+                    "Bu": 800, "Sd": 200, "Close": 25000.0,
+                    "ForeignBuyVolumeTotal": 100, "ForeignSellVolumeTotal": 50,
+                }
+
+        stream_ingester._on_tick_raw(FakeData())
+
+        # Tick should have been accumulated
+        assert "HPG" in stream_ingester._tick_bars
+
+    def test_session_confirmed_set_on_first_watchlist_tick(self):
+        """_session_confirmed transitions False→True on first valid tick."""
+        assert stream_ingester._session_confirmed is False
+        stream_ingester._loop = None
+
+        class FakeData:
+            def to_dict(self):
+                return {
+                    "Ticker": "HPG",  # HPG is in WATCHLIST
+                    "Timestamp": "2026-03-25T09:15:10",
+                    "MatchVolume": 500,
+                    "Bu": 400, "Sd": 100, "Close": 25000.0,
+                    "ForeignBuyVolumeTotal": 0, "ForeignSellVolumeTotal": 0,
+                }
+
+        stream_ingester._on_tick_raw(FakeData())
+
+        assert stream_ingester._session_confirmed is True
+
+
+# ── Health status accuracy ─────────────────────────────────────────────────
+
+class TestGetDetailedStatus:
+    def test_connected_only_after_session_confirmed(self):
+        """status=connected requires BOTH _stream_connected AND _session_confirmed."""
+        from datetime import timezone
+
+        stream_ingester._stream_connected = True
+        stream_ingester._session_confirmed = False
+        stream_ingester._startup_at = datetime.now(timezone.utc)
+
+        status = stream_ingester.get_detailed_status()
+
+        # Should NOT be "connected" yet — no tick received
+        assert status["status"] != "connected"
+
+    def test_connected_after_first_tick(self):
+        """After first tick, status becomes connected."""
+        stream_ingester._stream_connected = True
+        stream_ingester._session_confirmed = True
+        stream_ingester._last_bar_time = datetime.now(timezone.utc)
+
+        status = stream_ingester.get_detailed_status()
+
+        assert status["status"] == "connected"
+
+    def test_get_status_simple_requires_session_confirmed(self):
+        """get_status() returns 'connected' only when session is confirmed."""
+        stream_ingester._stream_connected = True
+        stream_ingester._session_confirmed = False
+        assert stream_ingester.get_status() == "disconnected"
+
+        stream_ingester._session_confirmed = True
+        assert stream_ingester.get_status() == "connected"
