@@ -30,10 +30,15 @@ def inject_deps(pool, redis, alert_queue: asyncio.Queue = None):
 _pending_confirms: dict[str, dict] = {}
 
 
-async def process(bar: dict):
+async def process(bar: dict, is_partial: bool = False):
     """
     Process a single 1-minute bar from FiinQuantX.
     bar = {ticker, bar_time (UTC ISO), open, high, low, close, volume, bu, sd, fb, fs, fn}
+
+    is_partial=True: called for mid-minute tick snapshots (early spike detection).
+    Skips _check_confirmations() to prevent the cumulative minute volume from
+    being added to the 15-min confirm accumulator on every 15-s partial call,
+    which would inflate the ratio 2-4x and cause false confirmations.
     """
     ticker = bar["ticker"]
     try:
@@ -70,8 +75,10 @@ async def process(bar: dict):
         if ratio >= threshold:
             await _fire_alert(ticker, bar, slot, ratio, baseline, in_magic, bar_time_ict)
 
-        # Check pending 15-min confirmations
-        await _check_confirmations(ticker, bar, slot)
+        # Check pending 15-min confirmations — skip for partial bars (Fix 2).
+        # Only completed bars should accumulate confirm volume.
+        if not is_partial:
+            await _check_confirmations(ticker, bar, slot)
 
     except Exception as e:
         logger.error(f"M1 process error for {ticker}: {e}", exc_info=True)
@@ -168,8 +175,13 @@ async def _check_confirmations(ticker: str, bar: dict, current_slot: int):
     if not pending:
         return
     if current_slot < pending["confirm_by_slot"]:
-        # Accumulate volume
-        _pending_confirms[ticker]["cumulative_volume"] += bar["volume"]
+        if current_slot == pending["slot"]:
+            # This is the completed bar for the same minute that triggered the alert.
+            # The alert fired from a partial snapshot; replace partial volume with the
+            # full minute's volume so the confirm accumulator starts from the right base.
+            _pending_confirms[ticker]["cumulative_volume"] = bar["volume"]
+        else:
+            _pending_confirms[ticker]["cumulative_volume"] += bar["volume"]
         return
 
     # 15 min elapsed — evaluate

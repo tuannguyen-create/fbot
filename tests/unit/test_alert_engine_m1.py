@@ -203,3 +203,74 @@ class TestConfirmation:
         expected_slot = get_slot(ict.time())
         assert pending["slot"] == expected_slot
         assert pending["confirm_by_slot"] == expected_slot + 15
+
+    @pytest.mark.asyncio
+    async def test_partial_origin_confirm_replaces_not_adds(self):
+        """Alert fired from partial bar (50k vol, slot=15).
+        Completed bar for same slot (200k) must REPLACE cumulative, not add.
+        cumulative should be 200k, not 250k (partial 50k + completed 200k).
+        """
+        from datetime import timezone
+        alert_engine_m1._pending_confirms["HPG"] = {
+            "alert_id": 99,
+            "slot": 15,
+            "confirm_by_slot": 30,
+            "cumulative_volume": 50_000,  # set by partial bar that triggered the alert
+        }
+
+        bar = {
+            "ticker": "HPG",
+            "bar_time": datetime(2026, 3, 18, 2, 15, 0, tzinfo=timezone.utc),  # slot=15
+            "volume": 200_000,  # full minute volume
+            "bu": 0, "sd": 0, "fb": 0, "fs": 0, "fn": 0,
+        }
+
+        await alert_engine_m1._check_confirmations("HPG", bar, current_slot=15)
+
+        # Must have replaced, not added
+        assert alert_engine_m1._pending_confirms["HPG"]["cumulative_volume"] == 200_000
+
+    @pytest.mark.asyncio
+    async def test_subsequent_minute_adds_normally(self):
+        """Bar for slot=16 (after alert at slot=15) should ADD to cumulative."""
+        from datetime import timezone
+        alert_engine_m1._pending_confirms["HPG"] = {
+            "alert_id": 99,
+            "slot": 15,
+            "confirm_by_slot": 30,
+            "cumulative_volume": 200_000,  # already replaced by completed slot-15 bar
+        }
+
+        bar = {
+            "ticker": "HPG",
+            "bar_time": datetime(2026, 3, 18, 2, 16, 0, tzinfo=timezone.utc),  # slot=16
+            "volume": 150_000,
+            "bu": 0, "sd": 0, "fb": 0, "fs": 0, "fn": 0,
+        }
+
+        await alert_engine_m1._check_confirmations("HPG", bar, current_slot=16)
+
+        assert alert_engine_m1._pending_confirms["HPG"]["cumulative_volume"] == 350_000
+
+    @pytest.mark.asyncio
+    async def test_partial_bar_skips_confirm_accumulation(self, injected_m1, sample_bar):
+        """process(bar, is_partial=True) must NOT touch pending_confirms cumulative."""
+        pool, conn, redis, queue = injected_m1
+
+        # Seed a pending confirm
+        alert_engine_m1._pending_confirms["HPG"] = {
+            "alert_id": 77,
+            "slot": 15,
+            "confirm_by_slot": 30,
+            "cumulative_volume": 100_000,
+        }
+
+        bar = {**sample_bar, "volume": 999_999,
+               "bar_time": datetime(2026, 3, 18, 2, 16, 0, tzinfo=timezone.utc)}
+
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
+            await alert_engine_m1.process(bar, is_partial=True)
+
+        # cumulative_volume must be untouched
+        assert alert_engine_m1._pending_confirms["HPG"]["cumulative_volume"] == 100_000
