@@ -8,7 +8,9 @@ Flow:
   Trading_Data_Stream callback (_on_tick_raw)
     → _accumulate_tick()          # aggregate into running 1m bar per ticker
     → on minute boundary  → _process_bar()    # DB save + M1 alert engine
-    → every 15 s (mid-minute) → _process_partial()  # M1 only, no DB write
+    → every 15 s (mid-minute) → _process_partial()  # M1 early detect only, no DB
+  _minute_flush_timer() (asyncio task, every 5 s)
+    → flushes bars whose minute has passed but no new tick arrived (low-vol stocks)
 """
 import asyncio
 import logging
@@ -35,6 +37,7 @@ _startup_at: Optional[datetime] = None
 _event = None
 _client = None
 _watchdog_task: Optional[asyncio.Task] = None
+_flush_task: Optional[asyncio.Task] = None  # minute-boundary flush timer
 
 BACKOFF_BASE = 60
 BACKOFF_MAX = 300
@@ -56,6 +59,10 @@ _tick_lock = _threading.Lock()
 # Per-ticker: monotonic time of last M1 early-detection check
 _last_m1_check: dict = {}
 _M1_CHECK_INTERVAL = 15  # seconds between mid-minute M1 calls
+
+# Stop signal: threading.Event set by _close_event() to unblock _stream_blocking().
+# Replaces polling the private _event._stop attribute (Fix 5).
+_stream_stop_event = _threading.Event()
 
 
 def inject_deps(pool, redis, alert_queue: asyncio.Queue):
@@ -116,6 +123,26 @@ def get_last_bar_time() -> Optional[datetime]:
 
 # ── Tick aggregation helpers ───────────────────────────────────────────────
 
+def _emit_bar(ticker: str, acc: dict) -> dict:
+    """Build completed 1m bar dict from accumulator snapshot. Thread-safe: no I/O."""
+    fb = acc["fb_end"] - acc["fb_start"]
+    fs = acc["fs_end"] - acc["fs_start"]
+    return {
+        "ticker": ticker,
+        "bar_time": acc["minute_key"],
+        "open": acc["open"],
+        "high": acc["high"],
+        "low": acc["low"],
+        "close": acc["close"],
+        "volume": acc["volume"],
+        "bu": acc["bu"],
+        "sd": acc["sd"],
+        "fb": max(0, fb),
+        "fs": max(0, fs),
+        "fn": fb - fs,
+    }
+
+
 def _accumulate_tick(d: dict) -> tuple[Optional[dict], Optional[dict]]:
     """
     Process one RealTimeData.to_dict() tick.
@@ -123,6 +150,9 @@ def _accumulate_tick(d: dict) -> tuple[Optional[dict], Optional[dict]]:
     Returns (completed_bar, partial_bar):
       - completed_bar: full 1m bar from the *previous* minute (ready for DB + M1)
       - partial_bar:   current running bar (for mid-minute M1 early detection)
+
+    Fix 4: fb/fs delta for the first tick of each minute now uses the previous
+    minute's final fb_end as fb_start, so no foreign volume is lost at boundaries.
     """
     ticker = (d.get("Ticker") or "").upper()
     if not ticker:
@@ -154,24 +184,15 @@ def _accumulate_tick(d: dict) -> tuple[Optional[dict], Optional[dict]]:
         acc = _tick_bars.get(ticker)
 
         if acc is None or acc["minute_key"] != minute_key:
-            # Minute boundary: emit and reset
+            # Minute boundary: emit completed bar from previous minute
             if acc is not None and acc["volume"] > 0:
-                fb = acc["fb_end"] - acc["fb_start"]
-                fs = acc["fs_end"] - acc["fs_start"]
-                completed = {
-                    "ticker": ticker,
-                    "bar_time": acc["minute_key"],
-                    "open": acc["open"],
-                    "high": acc["high"],
-                    "low": acc["low"],
-                    "close": acc["close"],
-                    "volume": acc["volume"],
-                    "bu": acc["bu"],
-                    "sd": acc["sd"],
-                    "fb": max(0, fb),
-                    "fs": max(0, fs),
-                    "fn": fb - fs,
-                }
+                completed = _emit_bar(ticker, acc)
+
+            # Fix 4: carry forward prev minute's fb_end as fb_start for new minute,
+            # so the first tick's foreign-flow contribution is captured correctly.
+            fb_start = acc["fb_end"] if acc is not None else fb_total
+            fs_start = acc["fs_end"] if acc is not None else fs_total
+
             _tick_bars[ticker] = {
                 "minute_key": minute_key,
                 "open": close,
@@ -181,8 +202,8 @@ def _accumulate_tick(d: dict) -> tuple[Optional[dict], Optional[dict]]:
                 "volume": match_vol,
                 "bu": bu,
                 "sd": sd,
-                "fb_start": fb_total,
-                "fs_start": fs_total,
+                "fb_start": fb_start,
+                "fs_start": fs_start,
                 "fb_end": fb_total,
                 "fs_end": fs_total,
             }
@@ -258,21 +279,22 @@ async def _process_bar(bar: dict):
         if ticker not in settings.WATCHLIST:
             return
         await _save_bar(bar)
-        await alert_engine_m1.process(bar)
+        await alert_engine_m1.process(bar)  # is_partial=False → confirm accumulator runs
     except Exception as e:
         logger.error(f"_process_bar error for {bar.get('ticker')}: {e}", exc_info=True)
 
 
 async def _process_partial(bar: dict):
-    """Partial (mid-minute) bar: run M1 only, no DB write.
+    """Partial (mid-minute) bar: M1 early detection only, no DB write.
 
-    bar_time carries the exact tick timestamp so alert_engine_m1.process()
-    can use elapsed_seconds for volume-rate projection.
+    Fix 2: passes is_partial=True so _check_confirmations() is skipped.
+    Without this, each 15-s partial call would add the cumulative minute volume
+    to the pending confirm accumulator, inflating the 15-min ratio 2-4x.
     """
     try:
         if bar.get("ticker") not in settings.WATCHLIST:
             return
-        await alert_engine_m1.process(bar)
+        await alert_engine_m1.process(bar, is_partial=True)
     except Exception as e:
         logger.error(f"_process_partial error for {bar.get('ticker')}: {e}", exc_info=True)
 
@@ -306,13 +328,61 @@ async def _save_bar(bar: dict):
         logger.error(f"_save_bar error: {e}")
 
 
+# ── Fix 1: Minute-boundary flush timer ─────────────────────────────────────
+
+async def _minute_flush_timer():
+    """Flush bars that haven't been closed by a next tick.
+
+    Guarantees that low-volume stocks and the final bar of each session
+    are persisted to DB even when no subsequent tick arrives to trigger
+    the normal minute-boundary emit in _accumulate_tick().
+    Runs every 5 s; only flushes bars whose minute_key < current minute.
+    """
+    while True:
+        await asyncio.sleep(5)
+
+        now_utc = datetime.now(timezone.utc)
+        current_minute = now_utc.replace(second=0, microsecond=0)
+
+        to_flush = []
+        with _tick_lock:
+            for ticker in list(_tick_bars.keys()):
+                acc = _tick_bars.get(ticker)
+                if acc is not None and acc["minute_key"] < current_minute and acc["volume"] > 0:
+                    to_flush.append(_emit_bar(ticker, acc))
+                    del _tick_bars[ticker]
+
+        for bar in to_flush:
+            global _last_bar_time
+            _last_bar_time = bar["bar_time"]
+            await _process_bar(bar)
+            logger.debug(f"Flush timer: emitted stale bar {bar['ticker']} {bar['bar_time']}")
+
+
+# ── Fix 3: Reset accumulator on disconnect ─────────────────────────────────
+
+def _reset_tick_state():
+    """Clear per-ticker accumulator and M1 check timestamps.
+
+    Called by _close_event() so reconnects start with clean state.
+    Without this, a partially accumulated bar from a crashed session
+    can corrupt the first minute of the new session.
+    """
+    global _last_m1_check
+    with _tick_lock:
+        _tick_bars.clear()
+    _last_m1_check.clear()
+
+
 # ── Stream lifecycle ────────────────────────────────────────────────────────
 
 def _stream_blocking():
     """Run blocking FiinQuantX tick stream. Called in thread executor."""
     global _stream_connected, _event, _client
     import FiinQuantX as fq
-    import time as _time
+
+    # Fix 5: reset our stop signal so this attempt can block correctly
+    _stream_stop_event.clear()
 
     _client = fq.FiinSession(
         username=settings.FIINQUANT_USERNAME,
@@ -327,10 +397,9 @@ def _stream_blocking():
     logger.info(f"FiinQuantX tick stream started for {len(settings.WATCHLIST)} tickers")
     _event.start()
 
-    # Block until stop() is called externally or stream ends
-    while not _event._stop:
-        _time.sleep(1)
-
+    # Fix 5: block on our own threading.Event instead of polling _event._stop
+    # (private attribute; not a stable library contract)
+    _stream_stop_event.wait()
     _stream_connected = False
     logger.info("FiinQuantX tick stream ended")
 
@@ -339,6 +408,8 @@ async def _close_event():
     """Stop tick stream without blocking event loop."""
     global _event, _client, _stream_connected
     _stream_connected = False
+    _stream_stop_event.set()   # Fix 5: unblock _stream_blocking()
+    _reset_tick_state()        # Fix 3: clear stale accumulator state across reconnects
     if _event:
         event_ref, _event = _event, None
         try:
@@ -387,11 +458,12 @@ async def _proactive_restart_timer():
 
 async def start():
     """Start tick stream with infinite retry. Non-blocking (runs in thread executor)."""
-    global _stream_connected, _loop, _watchdog_task, _startup_at
+    global _stream_connected, _loop, _watchdog_task, _flush_task, _startup_at
     _loop = asyncio.get_running_loop()
     _startup_at = datetime.now(timezone.utc)
 
     _watchdog_task = asyncio.create_task(_watchdog())
+    _flush_task = asyncio.create_task(_minute_flush_timer())  # Fix 1
 
     attempt = 0
     while True:
@@ -407,12 +479,14 @@ async def start():
             await _close_event()
             refresh_task.cancel()
             _watchdog_task.cancel()
+            _flush_task.cancel()
             return
         except asyncio.CancelledError:
             logger.info("Stream task cancelled")
             await _close_event()
             refresh_task.cancel()
             _watchdog_task.cancel()
+            _flush_task.cancel()
             raise
         except Exception as e:
             logger.error(f"Stream error (attempt {attempt}): {e}", exc_info=True)
@@ -435,9 +509,12 @@ async def start():
 
 
 async def stop():
-    global _stream_connected, _watchdog_task
+    global _stream_connected, _watchdog_task, _flush_task
     await _close_event()
     if _watchdog_task:
         _watchdog_task.cancel()
         _watchdog_task = None
+    if _flush_task:
+        _flush_task.cancel()
+        _flush_task = None
     logger.info("FiinQuantX tick stream stopped")
