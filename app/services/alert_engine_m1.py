@@ -175,8 +175,13 @@ async def _check_confirmations(ticker: str, bar: dict, current_slot: int):
     if not pending:
         return
     if current_slot < pending["confirm_by_slot"]:
-        # Accumulate volume
-        _pending_confirms[ticker]["cumulative_volume"] += bar["volume"]
+        if current_slot == pending["slot"]:
+            # This is the completed bar for the same minute that triggered the alert.
+            # The alert fired from a partial snapshot; replace partial volume with the
+            # full minute's volume so the confirm accumulator starts from the right base.
+            _pending_confirms[ticker]["cumulative_volume"] = bar["volume"]
+        else:
+            _pending_confirms[ticker]["cumulative_volume"] += bar["volume"]
         return
 
     # 15 min elapsed — evaluate

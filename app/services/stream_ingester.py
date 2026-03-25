@@ -359,12 +359,30 @@ async def _minute_flush_timer():
             logger.debug(f"Flush timer: emitted stale bar {bar['ticker']} {bar['bar_time']}")
 
 
-# ── Fix 3: Reset accumulator on disconnect ─────────────────────────────────
+# ── Fix 3: Flush in-progress bars + reset on disconnect ────────────────────
+
+async def _flush_all_bars():
+    """Flush ALL in-progress bars (including current minute's partial) to DB.
+
+    Called by _close_event() before clearing state. Ensures that bars
+    mid-accumulation during a proactive restart or manual stop are persisted,
+    not silently dropped. Complement to _minute_flush_timer which only handles
+    bars whose minute has already passed.
+    """
+    to_flush = []
+    with _tick_lock:
+        for ticker, acc in list(_tick_bars.items()):
+            if acc["volume"] > 0:
+                to_flush.append(_emit_bar(ticker, acc))
+    for bar in to_flush:
+        await _process_bar(bar)
+        logger.debug(f"Disconnect flush: {bar['ticker']} {bar['bar_time']}")
+
 
 def _reset_tick_state():
     """Clear per-ticker accumulator and M1 check timestamps.
 
-    Called by _close_event() so reconnects start with clean state.
+    Called after _flush_all_bars() so reconnects start with clean state.
     Without this, a partially accumulated bar from a crashed session
     can corrupt the first minute of the new session.
     """
@@ -409,6 +427,7 @@ async def _close_event():
     global _event, _client, _stream_connected
     _stream_connected = False
     _stream_stop_event.set()   # Fix 5: unblock _stream_blocking()
+    await _flush_all_bars()    # Fix 3: persist current minute's data before clearing
     _reset_tick_state()        # Fix 3: clear stale accumulator state across reconnects
     if _event:
         event_ref, _event = _event, None
@@ -421,7 +440,13 @@ async def _close_event():
 
 
 async def _watchdog():
-    """Restart stream if no ticks received during trading hours for too long."""
+    """Restart stream if no ticks received during trading hours for too long.
+
+    Handles two cases:
+    - Cold start / silent death: connected but never received first bar.
+      Uses _CONNECT_TIMEOUT_SECS (120 s) grace period, then forces reconnect.
+    - Stale stream: received bars previously but nothing for _STALE_MINUTES (10 min).
+    """
     from app.utils.trading_hours import is_trading_day
     from app.utils.timezone import to_ict
     from datetime import time as dtime
@@ -429,7 +454,7 @@ async def _watchdog():
     while True:
         await asyncio.sleep(60)
 
-        if not _stream_connected or _last_bar_time is None:
+        if not _stream_connected:
             continue
 
         now_utc = datetime.now(timezone.utc)
@@ -438,6 +463,16 @@ async def _watchdog():
         if not (dtime(9, 0) <= now_ict.time() <= dtime(15, 10)):
             continue
         if not is_trading_day(now_ict.date()):
+            continue
+
+        # Fix 2: cold start — connected but never received a bar.
+        # Without this check, watchdog would never trigger on a silently dead stream.
+        if _last_bar_time is None:
+            if _startup_at and (now_utc - _startup_at).total_seconds() > _CONNECT_TIMEOUT_SECS:
+                logger.warning(
+                    "No tick received within startup timeout — stream may be silently dead, forcing reconnect"
+                )
+                await _close_event()
             continue
 
         age_min = (now_utc - _last_bar_time).total_seconds() / 60
