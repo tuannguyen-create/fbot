@@ -136,6 +136,14 @@ def get_last_bar_time() -> Optional[datetime]:
 
 # ── Tick aggregation helpers ───────────────────────────────────────────────
 
+def _set_last_bar_time(dt: Optional[datetime]):
+    """Keep last_bar_time monotonic across partial/completed/flush paths."""
+    global _last_bar_time
+    if dt is None:
+        return
+    if _last_bar_time is None or dt > _last_bar_time:
+        _last_bar_time = dt
+
 def _emit_bar(ticker: str, acc: dict) -> dict:
     """Build completed 1m bar dict from accumulator snapshot. Thread-safe: no I/O."""
     fb = acc["fb_end"] - acc["fb_start"]
@@ -256,7 +264,7 @@ def _accumulate_tick(d: dict) -> tuple[Optional[dict], Optional[dict]]:
 
 def _on_tick_raw(data):
     """Trading_Data_Stream callback — called from stream thread per matched trade."""
-    global _last_bar_time, _session_confirmed
+    global _session_confirmed
 
     # Race gate: _close_event() sets _shutting_down=True before flushing _tick_bars.
     # Returning here ensures no new ticks mutate the accumulator during shutdown/flush.
@@ -279,12 +287,12 @@ def _on_tick_raw(data):
     completed, partial = _accumulate_tick(d)
 
     if completed is not None:
-        _last_bar_time = completed["bar_time"]
+        _set_last_bar_time(completed["bar_time"])
         if _loop is not None:
             asyncio.run_coroutine_threadsafe(_process_bar(completed), _loop)
 
     if partial is not None:
-        _last_bar_time = partial["bar_time"]
+        _set_last_bar_time(partial["bar_time"])
         now_t = _mono()
         if now_t - _last_m1_check.get(ticker, 0) >= _M1_CHECK_INTERVAL:
             _last_m1_check[ticker] = now_t
@@ -363,6 +371,9 @@ async def _minute_flush_timer():
     while True:
         await asyncio.sleep(5)
 
+        if _shutting_down:
+            continue
+
         now_utc = datetime.now(timezone.utc)
         current_minute = now_utc.replace(second=0, microsecond=0)
 
@@ -375,8 +386,7 @@ async def _minute_flush_timer():
                     del _tick_bars[ticker]
 
         for bar in to_flush:
-            global _last_bar_time
-            _last_bar_time = bar["bar_time"]
+            _set_last_bar_time(bar["bar_time"])
             await _process_bar(bar)
             logger.debug(f"Flush timer: emitted stale bar {bar['ticker']} {bar['bar_time']}")
 
@@ -396,7 +406,9 @@ async def _flush_all_bars():
         for ticker, acc in list(_tick_bars.items()):
             if acc["volume"] > 0:
                 to_flush.append(_emit_bar(ticker, acc))
+        _tick_bars.clear()
     for bar in to_flush:
+        _set_last_bar_time(bar["bar_time"])
         await _process_bar(bar)
         logger.debug(f"Disconnect flush: {bar['ticker']} {bar['bar_time']}")
 

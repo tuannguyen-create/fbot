@@ -213,6 +213,7 @@ class TestFlushAllBars:
         assert len(flushed) == 1
         assert flushed[0]["ticker"] == "TCB"
         assert flushed[0]["volume"] == 800_000
+        assert len(stream_ingester._tick_bars) == 0
 
     @pytest.mark.asyncio
     async def test_flush_all_bars_skips_empty_accumulators(self, mock_pool):
@@ -240,6 +241,7 @@ class TestFlushAllBars:
             await stream_ingester._flush_all_bars()
 
         assert len(flushed) == 0
+        assert len(stream_ingester._tick_bars) == 0
 
 
 # ── Reset tick state ───────────────────────────────────────────────────────
@@ -353,3 +355,14 @@ class TestGetDetailedStatus:
 
         stream_ingester._session_confirmed = True
         assert stream_ingester.get_status() == "connected"
+
+
+class TestLastBarTimeMonotonic:
+    def test_set_last_bar_time_does_not_move_backward(self):
+        newer = datetime(2026, 3, 25, 2, 15, 45, tzinfo=timezone.utc)
+        older = datetime(2026, 3, 25, 2, 15, 0, tzinfo=timezone.utc)
+
+        stream_ingester._last_bar_time = newer
+        stream_ingester._set_last_bar_time(older)
+
+        assert stream_ingester._last_bar_time == newer
