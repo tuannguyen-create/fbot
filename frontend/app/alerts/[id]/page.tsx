@@ -2,6 +2,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { alertsApi } from '@/lib/api'
 import { AlertStatusBadge } from '@/components/AlertStatusBadge'
+import { QualityBadge } from '@/components/QualityBadge'
 import { formatAlertTime, formatDateTimeICT, formatVolume, formatRatio, formatPct, slotToTimeStr } from '@/lib/formatters'
 import Link from 'next/link'
 
@@ -90,8 +91,58 @@ export default function AlertDetailPage({ params }: Props) {
           </div>
         </div>
 
+        {/* M1 Quality section */}
+        {alert.quality_score != null && (
+          <div className="mt-4 bg-gray-50 rounded-lg p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold text-gray-700">Chất lượng M1</p>
+              <QualityBadge grade={alert.quality_grade} reason={alert.quality_reason} />
+            </div>
+            <p className="text-xs text-gray-500">{alert.quality_reason}</p>
+            <div className="w-full bg-gray-200 rounded-full h-1.5">
+              <div
+                className={`h-1.5 rounded-full transition-all ${
+                  (alert.quality_score ?? 0) >= 70 ? 'bg-green-500' :
+                  (alert.quality_score ?? 0) >= 40 ? 'bg-yellow-400' : 'bg-gray-400'
+                }`}
+                style={{ width: `${alert.quality_score}%` }}
+              />
+            </div>
+            <p className="text-xs text-right text-gray-400">{alert.quality_score}/100</p>
+
+            {alert.features && (
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs text-gray-600 pt-1 border-t border-gray-200">
+                <div>Thân nến: <span className="font-medium">{alert.features.body_pct}%</span></div>
+                <div>Bóng trên: <span className="font-medium">{alert.features.upper_shadow_pct}%</span></div>
+                <div>Vị trí đóng cửa: <span className="font-medium">{alert.features.close_pos}%</span></div>
+                <div>Nến tăng mạnh: <span className="font-medium">{alert.features.strong_bull_candle ? 'Có' : 'Không'}</span></div>
+                <div>Biên độ 20 nến: <span className="font-medium">{alert.features.range_pct}%</span></div>
+                <div>Nền tích lũy: <span className="font-medium">{alert.features.is_sideways_base ? 'Có' : 'Không'}</span></div>
+                {alert.features.ma10 != null && (
+                  <div>MA10: <span className="font-medium">{alert.features.ma10.toLocaleString()}</span></div>
+                )}
+                {alert.features.ma20 != null && (
+                  <div>MA20: <span className="font-medium">{alert.features.ma20.toLocaleString()}</span></div>
+                )}
+                <div>MA stack tăng: <span className="font-medium">{alert.features.ma_stack_up ? 'Có' : 'Không'}</span></div>
+                {alert.features.macd_hist != null && (
+                  <div>
+                    MACD hist:{' '}
+                    <span className="font-medium">
+                      {alert.features.macd_hist.toFixed(4)}
+                      {alert.features.macd_hist_rising != null && (
+                        <span className="ml-1 text-gray-400">{alert.features.macd_hist_rising ? '↑' : '↓'}</span>
+                      )}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="mt-4 pt-4 border-t border-gray-100 text-sm text-gray-500">
-          <p>Email: {alert.email_sent ? '✅ Đã gửi' : '⏳ Chưa gửi'}</p>
+          <p>Email: {alert.email_sent ? 'Đã gửi' : 'Chưa gửi'}</p>
           {alert.cycle_event_id && (
             <p className="mt-1">
               Chu kỳ liên quan:{' '}
