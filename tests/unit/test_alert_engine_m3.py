@@ -244,3 +244,96 @@ class TestCycleUpdate:
 
         calls = [str(c) for c in conn.execute.call_args_list]
         assert any(PHASE_INVALIDATED in c for c in calls)
+
+
+# ── TestReplayHistory ──────────────────────────────────────────────────────
+
+class TestReplayHistory:
+    @pytest.fixture(autouse=True)
+    def inject_m3(self, mock_pool):
+        pool, conn = mock_pool
+        alert_engine_m3.inject_deps(pool, None, None)
+        return pool, conn
+
+    def _make_rows(self, n=22, breakout_idx=21, breakout_vol=4_000_000):
+        """Generate daily rows with a breakout at breakout_idx."""
+        rows = []
+        d = date(2026, 2, 1)
+        from app.utils.trading_hours import add_trading_days
+        for i in range(n):
+            vol = breakout_vol if i == breakout_idx else 900_000
+            close = 26000.0 if i == breakout_idx else 25000.0
+            rows.append(FakeRow({
+                "ticker": "HPG",
+                "date": d, "open": 25000.0, "high": 26100.0,
+                "low": 24900.0, "close": close, "volume": vol,
+            }))
+            d = add_trading_days(d, 1)
+        return rows
+
+    @pytest.mark.asyncio
+    async def test_dry_run_finds_breakout(self, mock_pool):
+        """replay_history(apply=False) returns candidate without creating cycle."""
+        pool, conn = mock_pool
+        rows = self._make_rows()
+        conn.fetch = AsyncMock(side_effect=[
+            rows,       # daily_ohlcv
+            [],         # existing cycle_events
+        ])
+        conn.fetchrow = AsyncMock(return_value=FakeRow({
+            "eligible_for_m3": True, "game_type": "institutional",
+        }))
+
+        with patch.object(settings, "WATCHLIST", ["HPG"]):
+            results = await alert_engine_m3.replay_history(days=25, apply=False)
+
+        assert len(results) >= 1
+        assert results[0]["ticker"] == "HPG"
+        assert results[0]["is_new"] is True
+        assert results[0]["created"] is False   # dry-run: not created
+        conn.fetchval.assert_not_called()       # no INSERT
+
+    @pytest.mark.asyncio
+    async def test_apply_creates_cycle(self, mock_pool):
+        """replay_history(apply=True) creates cycle_event without notifications."""
+        pool, conn = mock_pool
+        rows = self._make_rows()
+        conn.fetch = AsyncMock(side_effect=[
+            rows,   # daily_ohlcv
+            [],     # existing cycles
+        ])
+        conn.fetchrow = AsyncMock(side_effect=[
+            FakeRow({"eligible_for_m3": True, "game_type": "institutional"}),  # _get_ticker_meta
+            None,   # source_alert lookup (no alert found)
+        ])
+        conn.fetchval = AsyncMock(return_value=99)  # INSERT RETURNING id
+
+        with patch.object(settings, "WATCHLIST", ["HPG"]), \
+             patch("app.services.alert_engine_m3.notification") as mock_notif:
+            mock_notif.send_cycle_breakout_email = AsyncMock()
+            results = await alert_engine_m3.replay_history(days=25, apply=True)
+
+        assert any(r["created"] for r in results)
+        # notify=False → email must NOT be sent
+        mock_notif.send_cycle_breakout_email.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_idempotent_skips_existing_cycles(self, mock_pool):
+        """Existing cycle for same (ticker, breakout_date) is not re-created."""
+        pool, conn = mock_pool
+        rows = self._make_rows()
+        # Return existing cycle for the breakout date
+        breakout_date = rows[-1]["date"]
+        conn.fetch = AsyncMock(side_effect=[
+            rows,
+            [FakeRow({"ticker": "HPG", "breakout_date": breakout_date})],
+        ])
+        conn.fetchrow = AsyncMock(return_value=FakeRow({
+            "eligible_for_m3": True, "game_type": "institutional",
+        }))
+
+        with patch.object(settings, "WATCHLIST", ["HPG"]):
+            results = await alert_engine_m3.replay_history(days=25, apply=True)
+
+        matching = [r for r in results if r["ticker"] == "HPG"]
+        assert all(not r["created"] for r in matching)

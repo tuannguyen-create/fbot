@@ -56,7 +56,7 @@ async def list_alerts(
         rows = await conn.fetch(
             f"""
             SELECT id, ticker, fired_at, bar_time, slot, volume, ratio_5d, bu_pct,
-                   in_magic_window, status
+                   in_magic_window, status, quality_grade
             FROM volume_alerts {where}
             ORDER BY bar_time DESC
             LIMIT ${idx} OFFSET ${idx+1}
@@ -102,7 +102,9 @@ async def get_alert(alert_id: int, pool: asyncpg.Pool = Depends(get_db)):
             """
             SELECT id, ticker, fired_at, bar_time, slot, volume, ratio_5d, bu_pct,
                    in_magic_window, status, baseline_5d, foreign_net,
-                   confirmed_at, ratio_15m, email_sent, cycle_event_id
+                   confirmed_at, ratio_15m, email_sent, cycle_event_id,
+                   features, quality_score, quality_grade, quality_reason,
+                   strong_bull_candle, is_sideways_base
             FROM volume_alerts WHERE id=$1
             """,
             alert_id,

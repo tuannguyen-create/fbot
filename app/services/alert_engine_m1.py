@@ -1,8 +1,11 @@
 """Module 1: Volume Scanner Alert Engine."""
 import asyncio
+import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
+
+from collections import defaultdict
 
 from app.config import settings
 from app.utils.timezone import to_ict
@@ -29,6 +32,152 @@ def inject_deps(pool, redis, alert_queue: asyncio.Queue = None):
 # key = ticker, value = {alert_id, slot, confirm_by_slot}
 _pending_confirms: dict[str, dict] = {}
 
+
+# ── Pure evaluation (no side effects) ─────────────────────────────────────
+
+def _calc_bu_pct(bar: dict) -> Optional[float]:
+    bu = bar.get("bu", 0) or 0
+    sd = bar.get("sd", 0) or 0
+    return (bu / (bu + sd) * 100) if (bu + sd) > 0 else None
+
+
+def evaluate_bar(bar: dict, avg_5d: float) -> Optional[dict]:
+    """Pure M1 evaluation — no I/O, no side effects.
+
+    Returns an evaluation dict when this bar crosses the alert threshold,
+    or None when it does not. Safe to call from historical replay paths.
+
+    Result keys: ticker, bar_time, bar_time_ict, slot, volume, ratio,
+                 in_magic, threshold, bu_pct.
+    """
+    if not avg_5d or avg_5d <= 0:
+        return None
+    try:
+        bar_time_utc: datetime = bar["bar_time"]
+        if isinstance(bar_time_utc, str):
+            bar_time_utc = datetime.fromisoformat(bar_time_utc.replace("Z", "+00:00"))
+        bar_time_ict = to_ict(bar_time_utc)
+
+        slot = get_slot(bar_time_ict.time())
+        if slot is None:
+            return None
+
+        volume = bar.get("volume") or 0
+        in_magic = is_magic_window(bar_time_ict.time())
+        threshold = settings.THRESHOLD_MAGIC if in_magic else settings.THRESHOLD_NORMAL
+
+        elapsed_seconds = bar_time_ict.second
+        if elapsed_seconds >= 10:
+            ratio = int(volume * (60 / elapsed_seconds)) / avg_5d
+        else:
+            ratio = volume / avg_5d
+
+        if ratio < threshold:
+            return None
+
+        return {
+            "ticker": bar.get("ticker"),
+            "bar_time": bar_time_utc,
+            "bar_time_ict": bar_time_ict,
+            "slot": slot,
+            "volume": volume,
+            "ratio": ratio,
+            "in_magic": in_magic,
+            "threshold": threshold,
+            "bu_pct": _calc_bu_pct(bar),
+        }
+    except Exception as e:
+        logger.debug(f"evaluate_bar error: {e}")
+        return None
+
+
+# ── Historical scan (read-only, no alerts emitted) ────────────────────────
+
+async def scan_m1_history(days: int = 25) -> list[dict]:
+    """Scan intraday_1m for bars that would trigger M1 alerts using rolling
+    historical baselines — no DB writes, no SSE, no email.
+
+    APPROXIMATION NOTICE: this evaluates completed 1m bars only. Live M1
+    uses partial mid-minute tick detection and rate projection, so this
+    will miss spikes detected intra-minute and may compute slightly different
+    ratios. Treat results as a bar-close approximation, not an exact replay.
+
+    Historical baseline (avg_5d) is computed per ticker+slot from the same
+    slot's volume over the 5 preceding calendar days in intraday_1m — not
+    from the live baseline_service (which reflects current data, not the
+    correct historical value for each bar).
+
+    Requires intraday_1m to be populated (see historical_intraday_service).
+    """
+    scan_cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    # 10 extra calendar days to build a stable 5-day rolling baseline
+    lookback_cutoff = scan_cutoff - timedelta(days=10)
+
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT ticker, bar_time, open, high, low, close, volume, bu, sd, fn
+            FROM intraday_1m
+            WHERE bar_time >= $1 AND volume > 0
+            ORDER BY ticker, bar_time
+            """,
+            lookback_cutoff,
+        )
+
+    # Group bars by (ticker, slot) — each list is chronologically sorted
+    by_ticker_slot: dict[tuple, list] = defaultdict(list)
+    for row in rows:
+        bar = dict(row)
+        bar_time_ict = to_ict(bar["bar_time"])
+        slot = get_slot(bar_time_ict.time())
+        if slot is None:
+            continue
+        bar["_slot"] = slot
+        bar["_ict_date"] = bar_time_ict.date()
+        by_ticker_slot[(bar["ticker"], slot)].append(bar)
+
+    results: list[dict] = []
+
+    for (ticker, slot), bars in by_ticker_slot.items():
+        for i, bar in enumerate(bars):
+            # Only report bars inside the requested scan window
+            if bar["bar_time"] < scan_cutoff:
+                continue
+
+            # Rolling avg_5d: volumes from the same ticker+slot over the
+            # 5 previous calendar days (days_diff in [1..7] handles weekends)
+            bar_date = bar["_ict_date"]
+            prev_vols = [
+                b["volume"] for b in bars[:i]
+                if 1 <= (bar_date - b["_ict_date"]).days <= 7 and b["volume"] > 0
+            ]
+            if len(prev_vols) < 3:
+                continue
+
+            avg_5d = sum(prev_vols[-5:]) / min(len(prev_vols), 5)
+            result = evaluate_bar(bar, avg_5d)
+            if result:
+                results.append({
+                    "ticker": ticker,
+                    "bar_time": bar["bar_time"].isoformat(),
+                    "slot": slot,
+                    "volume": result["volume"],
+                    "ratio": round(result["ratio"], 3),
+                    "avg_5d_hist": int(avg_5d),
+                    "in_magic": result["in_magic"],
+                    "threshold": result["threshold"],
+                    "bu_pct": round(result["bu_pct"], 1) if result["bu_pct"] is not None else None,
+                })
+
+    results.sort(key=lambda x: x["bar_time"])
+    logger.info(
+        f"M1 scan_history: {len(results)} hits over last {days} days "
+        f"(bar-close approx, rolling baseline)"
+    )
+    return results
+
+
+# ── Live processing ────────────────────────────────────────────────────────
 
 async def process(bar: dict, is_partial: bool = False):
     """
@@ -84,6 +233,194 @@ async def process(bar: dict, is_partial: bool = False):
         logger.error(f"M1 process error for {ticker}: {e}", exc_info=True)
 
 
+# ── M1 Quality Layer ───────────────────────────────────────────────────────
+
+def _ema(values: list[float], period: int) -> Optional[list[float]]:
+    """EMA over values (oldest-first). Returns None if insufficient data."""
+    if len(values) < period:
+        return None
+    k = 2 / (period + 1)
+    result = [sum(values[:period]) / period]
+    for v in values[period:]:
+        result.append(v * k + result[-1] * (1 - k))
+    return result
+
+
+def _calc_macd(
+    closes_newest_first: list[float],
+) -> tuple[Optional[float], Optional[bool]]:
+    """MACD(12,26,9) histogram from close prices newest-first.
+    Returns (hist_now rounded 4dp, hist_rising bool) or (None, None).
+    Needs ≥34 bars for a reliable signal.
+    """
+    if len(closes_newest_first) < 34:
+        return None, None
+    closes = list(reversed(closes_newest_first))  # oldest-first for EMA
+    ema12 = _ema(closes, 12)
+    ema26 = _ema(closes, 26)
+    if ema12 is None or ema26 is None:
+        return None, None
+    # ema12[k] covers close at position 11+k; ema26[k] covers close at position 25+k.
+    # They align when ema12[14+k] and ema26[k] both cover close[25+k].
+    macd_line = [e12 - e26 for e12, e26 in zip(ema12[14:], ema26)]
+    signal = _ema(macd_line, 9)
+    if signal is None or len(signal) < 2:
+        return None, None
+    hist_now  = round(macd_line[-1] - signal[-1], 4)
+    hist_prev = round(macd_line[-2] - signal[-2], 4)
+    return hist_now, hist_now > hist_prev
+
+
+def compute_m1_features(bar: dict, recent_bars: list[dict]) -> dict:
+    """Compute M1 quality features from trigger bar + up to 50 preceding 1m bars.
+
+    Parameters
+    ----------
+    bar : dict
+        The trigger bar (open, high, low, close, volume, bu, sd).
+    recent_bars : list[dict]
+        Recent bars ordered newest-first (index 0 = bar immediately before trigger).
+        Expected up to 50 bars fetched from intraday_1m.
+
+    Returns
+    -------
+    dict with keys: body_pct, upper_shadow_pct, lower_shadow_pct, close_pos,
+    strong_bull_candle, avg_vol_20, avg_vol_50, range_pct, is_sideways_base,
+    ma10, ma20, price_above_ma10, ma_stack_up, macd_hist, macd_hist_rising,
+    quality_score (0-100), quality_reason (str).
+    """
+    o = float(bar.get("open") or 0)
+    h = float(bar.get("high") or 0)
+    lo = float(bar.get("low") or 0)
+    c = float(bar.get("close") or 0)
+
+    candle_range = h - lo
+    body = abs(c - o)
+    upper_shadow = h - max(c, o)
+
+    eps = 1e-9
+    body_pct         = round(body / (candle_range + eps) * 100, 1)
+    upper_shadow_pct = round(upper_shadow / (candle_range + eps) * 100, 1)
+    lower_shadow_pct = round(100 - body_pct - upper_shadow_pct, 1)
+    close_pos        = round((c - lo) / (candle_range + eps) * 100, 1)
+
+    # Strong bull: body ≥50%, close in upper third, green candle
+    strong_bull_candle = bool(body_pct >= 50.0 and close_pos >= 67.0 and c > o)
+
+    # Volume regime using recent bars (newest-first slices)
+    vols_20 = [float(b.get("volume") or 0) for b in recent_bars[:20]]
+    vols_50 = [float(b.get("volume") or 0) for b in recent_bars[:50]]
+    avg_vol_20 = sum(vols_20) / len(vols_20) if vols_20 else 0.0
+    avg_vol_50 = sum(vols_50) / len(vols_50) if vols_50 else 0.0
+
+    # Sideways base: last 20 bars' close range < 3% AND avg vol declining
+    closes_20 = [float(b.get("close") or 0) for b in recent_bars[:20] if b.get("close")]
+    if closes_20:
+        ph = max(closes_20)
+        pl = min(closes_20)
+        mid = (ph + pl) / 2
+        range_pct = round((ph - pl) / (mid + eps) * 100, 2)
+    else:
+        range_pct = 0.0
+
+    is_sideways_base = bool(
+        range_pct > 0
+        and range_pct < 3.0
+        and avg_vol_20 > 0
+        and avg_vol_20 <= avg_vol_50 * 0.8
+    )
+
+    # MA alignment: build closes list newest-first with trigger bar prepended
+    closes_for_ma = [c] + [float(b.get("close") or 0) for b in recent_bars[:49]]
+    ma10 = round(sum(closes_for_ma[:10]) / 10, 2) if len(closes_for_ma) >= 10 else None
+    ma20 = round(sum(closes_for_ma[:20]) / 20, 2) if len(closes_for_ma) >= 20 else None
+    price_above_ma10 = bool(c > ma10) if ma10 is not None else None
+    ma_stack_up = bool(
+        price_above_ma10 is True
+        and ma10 is not None
+        and ma20 is not None
+        and ma10 > ma20
+    )
+
+    # MACD
+    macd_hist, macd_hist_rising = _calc_macd(closes_for_ma)
+
+    # Composite score
+    score = 0
+    reasons: list[str] = []
+
+    if strong_bull_candle:
+        score += 30
+        reasons.append("nến tăng mạnh")
+    elif body_pct >= 40 and c > o:
+        score += 15
+        reasons.append("nến tăng vừa")
+
+    if is_sideways_base:
+        score += 25
+        reasons.append("nền tích lũy")
+
+    if ma_stack_up:
+        score += 25
+        reasons.append("MA xếp chồng tăng")
+    elif price_above_ma10:
+        score += 10
+        reasons.append("trên MA10")
+
+    if macd_hist is not None and macd_hist > 0 and macd_hist_rising:
+        score += 20
+        reasons.append("MACD tăng")
+    elif macd_hist is not None and macd_hist > 0:
+        score += 10
+        reasons.append("MACD dương")
+
+    return {
+        "body_pct": body_pct,
+        "upper_shadow_pct": upper_shadow_pct,
+        "lower_shadow_pct": lower_shadow_pct,
+        "close_pos": close_pos,
+        "strong_bull_candle": strong_bull_candle,
+        "avg_vol_20": int(avg_vol_20),
+        "avg_vol_50": int(avg_vol_50),
+        "range_pct": range_pct,
+        "is_sideways_base": is_sideways_base,
+        "ma10": ma10,
+        "ma20": ma20,
+        "price_above_ma10": price_above_ma10,
+        "ma_stack_up": ma_stack_up,
+        "macd_hist": macd_hist,
+        "macd_hist_rising": macd_hist_rising,
+        "quality_score": min(score, 100),
+        "quality_reason": ", ".join(reasons) if reasons else "không đủ tín hiệu",
+    }
+
+
+async def _fetch_recent_bars(ticker: str, bar_time: datetime, n: int = 50) -> list[dict]:
+    """Fetch up to n completed 1m bars for ticker with bar_time < trigger bar_time.
+    Returns newest-first. Returns [] if pool unavailable or on error.
+    """
+    if _pool is None:
+        return []
+    try:
+        async with _pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT open, high, low, close, volume, bu, sd
+                FROM intraday_1m
+                WHERE ticker = $1 AND bar_time < $2
+                ORDER BY bar_time DESC
+                LIMIT $3
+                """,
+                ticker,
+                bar_time,
+                n,
+            )
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"_fetch_recent_bars failed for {ticker}: {e}")
+        return []
+
+
 async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline: dict, in_magic: bool, bar_time: datetime = None):
     """Insert alert (with dedup) and trigger SSE + email."""
     bu = bar.get("bu", 0) or 0
@@ -97,14 +434,28 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
     if _redis is not None and await _redis.exists(throttle_key):
         return
 
+    # Compute M1 quality features (non-blocking, best-effort)
+    recent_bars = await _fetch_recent_bars(ticker, bar_time or bar["bar_time"])
+    features    = compute_m1_features(bar, recent_bars)
+    quality_score = features["quality_score"]
+    quality_grade = (
+        "A" if quality_score >= 70 else
+        "B" if quality_score >= 40 else
+        "C"
+    )
+    quality_reason = features["quality_reason"]
+
     try:
         async with _pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO volume_alerts
                     (ticker, slot, bar_time, volume, baseline_5d, ratio_5d, bu_pct, foreign_net,
-                     in_magic_window, status)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'fired')
+                     in_magic_window, status,
+                     features, quality_score, quality_grade, quality_reason,
+                     strong_bull_candle, is_sideways_base)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'fired',
+                        $10::jsonb, $11, $12, $13, $14, $15)
                 ON CONFLICT (ticker, slot, (DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')))
                 DO NOTHING
                 RETURNING id, fired_at
@@ -118,6 +469,12 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
                 round(bu_pct, 4) if bu_pct is not None else None,
                 foreign_net,
                 in_magic,
+                json.dumps(features),
+                quality_score,
+                quality_grade,
+                quality_reason,
+                features["strong_bull_candle"],
+                features["is_sideways_base"],
             )
 
         if row is None:
@@ -155,6 +512,9 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
                     "in_magic_window": in_magic,
                     "status": "fired",
                     "fired_at": fired_at.isoformat() if fired_at else None,
+                    "quality_score": quality_score,
+                    "quality_grade": quality_grade,
+                    "quality_reason": quality_reason,
                 },
             })
 
