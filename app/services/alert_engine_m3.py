@@ -1,7 +1,8 @@
 """Module 3: Cycle Analysis Alert Engine (meeting-goc v1.5)."""
 import asyncio
 import logging
-from datetime import date
+from collections import defaultdict
+from datetime import date, timedelta
 from statistics import mean
 from typing import Optional
 
@@ -223,6 +224,7 @@ async def _create_cycle(
     vol_ratio: float = 0.0,
     price_chg: float = 0.0,
     alert_id: Optional[int] = None,
+    notify: bool = True,
 ):
     est_dist_days = 20
     breakout_date = today_row["date"]
@@ -298,24 +300,25 @@ async def _create_cycle(
                 cycle_id, resolved_alert_id,
             )
 
-    if _alert_queue is not None:
-        await _alert_queue.put({
-            "type": "cycle_alert",
-            "data": {
-                "id": cycle_id,
-                "ticker": ticker,
-                "breakout_date": str(breakout_date),
-                "phase": PHASE_DISTRIBUTION,
-                "game_type": game_type,
-                "rewatch_window_start": str(rewatch_start),
-                "rewatch_window_end": str(rewatch_end),
-                "breakout_zone_low": zone_low,
-                "breakout_zone_high": zone_high,
-                "phase_reason": phase_reason,
-            },
-        })
+    if notify:
+        if _alert_queue is not None:
+            await _alert_queue.put({
+                "type": "cycle_alert",
+                "data": {
+                    "id": cycle_id,
+                    "ticker": ticker,
+                    "breakout_date": str(breakout_date),
+                    "phase": PHASE_DISTRIBUTION,
+                    "game_type": game_type,
+                    "rewatch_window_start": str(rewatch_start),
+                    "rewatch_window_end": str(rewatch_end),
+                    "breakout_zone_low": zone_low,
+                    "breakout_zone_high": zone_high,
+                    "phase_reason": phase_reason,
+                },
+            })
 
-    asyncio.create_task(notification.send_cycle_breakout_email(cycle_id))
+        asyncio.create_task(notification.send_cycle_breakout_email(cycle_id))
 
 
 async def _update_cycle(ticker: str, cycle: dict, recent_rows: list, ma20: float):
@@ -410,3 +413,109 @@ async def _update_cycle(ticker: str, cycle: dict, recent_rows: list, ma20: float
                 remaining,
                 elapsed,
             )
+
+
+# ── Historical M3 replay ───────────────────────────────────────────────────
+
+async def replay_history(days: int = 25, apply: bool = False) -> list[dict]:
+    """Replay M3 breakout detection over historical daily_ohlcv.
+
+    Iterates each ticker's daily rows chronologically and applies the same
+    breakout conditions used in run_daily(). Deduped against existing
+    cycle_events so running with apply=True multiple times is idempotent.
+
+    apply=False (default): dry-run, returns candidates without writing to DB.
+    apply=True: creates cycle_events for new breakouts (no notifications).
+    """
+    cutoff = date.today() - timedelta(days=days + 15)  # calendar buffer for MA20
+
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT ticker, date, open, high, low, close, volume
+            FROM daily_ohlcv
+            WHERE date >= $1
+            ORDER BY ticker, date ASC
+            """,
+            cutoff,
+        )
+        existing = await conn.fetch(
+            "SELECT ticker, breakout_date FROM cycle_events WHERE breakout_date >= $1",
+            cutoff,
+        )
+
+    existing_set = {(r["ticker"], r["breakout_date"]) for r in existing}
+
+    by_ticker: dict[str, list] = defaultdict(list)
+    for r in rows:
+        by_ticker[r["ticker"]].append(dict(r))
+
+    candidates: list[dict] = []
+    created_count = 0
+
+    for ticker in settings.WATCHLIST:
+        trows = by_ticker.get(ticker, [])
+        if len(trows) < 2:
+            continue
+
+        meta = await _get_ticker_meta(ticker)
+        if not meta["eligible"]:
+            continue
+
+        for i in range(1, len(trows)):
+            today_row = trows[i]
+            prev_row  = trows[i - 1]
+
+            if not today_row["volume"] or not prev_row["close"] or not today_row["close"]:
+                continue
+
+            hist_vols = [r["volume"] for r in trows[:i] if r["volume"]]
+            if len(hist_vols) < 3:
+                continue
+
+            ma20 = mean(hist_vols[-20:]) if len(hist_vols) >= 20 else mean(hist_vols)
+            if not ma20:
+                continue
+
+            vol_ratio = today_row["volume"] / ma20
+            price_chg = (today_row["close"] - prev_row["close"]) / prev_row["close"]
+
+            if vol_ratio < settings.BREAKOUT_VOL_MULT or price_chg < settings.BREAKOUT_PRICE_PCT:
+                continue
+
+            bd = today_row["date"]
+            is_new = (ticker, bd) not in existing_set
+
+            candidate: dict = {
+                "ticker": ticker,
+                "breakout_date": str(bd),
+                "vol_ratio": round(vol_ratio, 2),
+                "price_change_pct": round(price_chg * 100, 2),
+                "volume": today_row["volume"],
+                "close": today_row["close"],
+                "ma20_used": int(ma20),
+                "is_new": is_new,
+                "created": False,
+            }
+
+            if apply and is_new:
+                try:
+                    await _create_cycle(
+                        ticker, today_row, ma20, meta["game_type"],
+                        vol_ratio=vol_ratio, price_chg=price_chg,
+                        alert_id=None, notify=False,
+                    )
+                    candidate["created"] = True
+                    created_count += 1
+                    existing_set.add((ticker, bd))  # prevent duplicate in same scan
+                except Exception as e:
+                    logger.error(f"replay_history create_cycle {ticker} {bd}: {e}")
+                    candidate["error"] = str(e)
+
+            candidates.append(candidate)
+
+    logger.info(
+        f"M3 replay_history: {len(candidates)} candidates "
+        f"({sum(1 for c in candidates if c['is_new'])} new, {created_count} created)"
+    )
+    return candidates

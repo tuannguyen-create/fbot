@@ -274,3 +274,132 @@ class TestConfirmation:
 
         # cumulative_volume must be untouched
         assert alert_engine_m1._pending_confirms["HPG"]["cumulative_volume"] == 100_000
+
+
+# ── TestEvaluateBar ────────────────────────────────────────────────────────
+
+class TestEvaluateBar:
+    def _bar(self, volume=2_100_000, second=0):
+        from datetime import timezone
+        return {
+            "ticker": "HPG",
+            "bar_time": datetime(2026, 3, 18, 3, 15, second, tzinfo=timezone.utc),  # 10:15 ICT (outside magic)
+            "volume": volume,
+            "bu": 700_000, "sd": 300_000,
+        }
+
+    def test_returns_none_below_threshold(self):
+        bar = self._bar(volume=1_500_000)
+        result = alert_engine_m1.evaluate_bar(bar, avg_5d=1_000_000)
+        assert result is None  # 1.5x < 2.0x threshold (non-magic window)
+
+    def test_returns_result_above_threshold(self):
+        bar = self._bar(volume=2_100_000)
+        result = alert_engine_m1.evaluate_bar(bar, avg_5d=1_000_000)
+        assert result is not None
+        assert result["slot"] == 75  # 10:15 = 75 min past 9:00
+        assert result["ratio"] == pytest.approx(2.1)
+        assert result["in_magic"] is False
+
+    def test_magic_window_lower_threshold(self):
+        """9:00–9:30 ICT → magic window, threshold 1.5x not 2.0x."""
+        from datetime import timezone
+        bar = {
+            "ticker": "HPG",
+            "bar_time": datetime(2026, 3, 18, 2, 5, 0, tzinfo=timezone.utc),  # 9:05 ICT
+            "volume": 1_600_000,
+            "bu": 0, "sd": 0,
+        }
+        result = alert_engine_m1.evaluate_bar(bar, avg_5d=1_000_000)
+        assert result is not None
+        assert result["in_magic"] is True
+        assert result["threshold"] == settings.THRESHOLD_MAGIC
+
+    def test_rate_projection_mid_minute(self):
+        """20s elapsed with 800k → projected = 800k * 60/20 = 2.4M → hits 2.0x on 1M baseline."""
+        bar = self._bar(volume=800_000, second=20)
+        result = alert_engine_m1.evaluate_bar(bar, avg_5d=1_000_000)
+        assert result is not None
+        assert result["ratio"] == pytest.approx(2.4)
+
+    def test_returns_none_for_zero_baseline(self):
+        result = alert_engine_m1.evaluate_bar(self._bar(), avg_5d=0)
+        assert result is None
+
+    def test_bu_pct_calculated(self):
+        bar = self._bar(volume=3_000_000)
+        bar["bu"] = 700_000
+        bar["sd"] = 300_000
+        result = alert_engine_m1.evaluate_bar(bar, avg_5d=1_000_000)
+        assert result is not None
+        assert result["bu_pct"] == pytest.approx(70.0)
+
+    def test_no_side_effects(self):
+        """evaluate_bar must not touch _pending_confirms or any global state."""
+        before = dict(alert_engine_m1._pending_confirms)
+        alert_engine_m1.evaluate_bar(self._bar(), avg_5d=1_000_000)
+        assert alert_engine_m1._pending_confirms == before
+
+
+# ── TestScanM1History ──────────────────────────────────────────────────────
+
+class TestScanM1History:
+    @pytest.mark.asyncio
+    async def test_returns_hits_above_threshold(self, injected_m1):
+        pool, conn, redis, queue = injected_m1
+        from datetime import timezone
+        conn.fetch = AsyncMock(return_value=[
+            {
+                "ticker": "HPG",
+                "bar_time": datetime(2026, 3, 18, 2, 15, 0, tzinfo=timezone.utc),
+                "open": 25000.0, "high": 25200.0, "low": 24900.0, "close": 25100.0,
+                "volume": 2_500_000,
+                "bu": 1_500_000, "sd": 1_000_000,
+                "fb": 100_000, "fs": 50_000, "fn": 50_000,
+            }
+        ])
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
+            results = await alert_engine_m1.scan_m1_history(days=5)
+
+        assert len(results) == 1
+        assert results[0]["ticker"] == "HPG"
+        assert results[0]["ratio"] == pytest.approx(2.5)
+
+    @pytest.mark.asyncio
+    async def test_excludes_bars_below_threshold(self, injected_m1):
+        pool, conn, redis, queue = injected_m1
+        from datetime import timezone
+        conn.fetch = AsyncMock(return_value=[
+            {
+                "ticker": "HPG",
+                "bar_time": datetime(2026, 3, 18, 3, 15, 0, tzinfo=timezone.utc),  # 10:15 ICT (outside magic)
+                "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0,
+                "volume": 1_500_000,  # 1.5x < 2.0x threshold (non-magic)
+                "bu": 0, "sd": 0, "fb": 0, "fs": 0, "fn": 0,
+            }
+        ])
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
+            results = await alert_engine_m1.scan_m1_history(days=5)
+
+        assert len(results) == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_bars_without_baseline(self, injected_m1):
+        pool, conn, redis, queue = injected_m1
+        from datetime import timezone
+        conn.fetch = AsyncMock(return_value=[
+            {
+                "ticker": "HPG",
+                "bar_time": datetime(2026, 3, 18, 2, 15, 0, tzinfo=timezone.utc),
+                "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0,
+                "volume": 5_000_000,
+                "bu": 0, "sd": 0, "fb": 0, "fs": 0, "fn": 0,
+            }
+        ])
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs:
+            mock_bs.get_baseline = AsyncMock(return_value=None)
+            results = await alert_engine_m1.scan_m1_history(days=5)
+
+        assert len(results) == 0

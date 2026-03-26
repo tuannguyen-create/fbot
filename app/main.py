@@ -64,6 +64,7 @@ async def lifespan(app: FastAPI):
     from app.services import baseline_service, notification, stream_ingester
     from app.services import alert_engine_m1, alert_engine_m3
     from app.services import market_calendar, daily_ohlcv_service
+    from app.services import historical_intraday_service
     from app.scheduler import setup_jobs
     from app.api.stream import alert_queue, broadcaster
 
@@ -97,6 +98,7 @@ async def lifespan(app: FastAPI):
     alert_engine_m1.inject_deps(pool, redis, alert_queue)
     alert_engine_m3.inject_deps(pool, redis, alert_queue)
     daily_ohlcv_service.inject_deps(pool)
+    historical_intraday_service.inject_deps(pool)
 
     # 6. Warm in-memory baseline cache + first-run backfill
     await baseline_service.warm_cache()
@@ -112,14 +114,18 @@ async def lifespan(app: FastAPI):
     broadcaster_task = asyncio.create_task(broadcaster())
     stream_task = asyncio.create_task(stream_ingester.start())
 
-    # Backfill daily OHLCV — wait until stream connects (up to 60 s) to avoid
-    # racing FiinQuantX session cleanup at boot; track handle for clean shutdown
+    # Backfill daily OHLCV + intraday 1m — wait until stream connects (up to 60 s)
+    # to avoid racing FiinQuantX session cleanup at boot.
     async def _delayed_backfill():
         for _ in range(60):
-            if stream_ingester.get_status() == 'connected':
+            if stream_ingester.get_status() == "connected":
                 break
             await asyncio.sleep(1)
         await daily_ohlcv_service.backfill_historical()
+        # Seed intraday_1m for M1 baseline accuracy when data is sparse (<5 days)
+        if await historical_intraday_service.check_needs_backfill():
+            logger.info("intraday_1m sparse — running 1m historical backfill")
+            await historical_intraday_service.backfill_intraday()
     backfill_task = asyncio.create_task(_delayed_backfill())
 
     logger.info("fbot backend started ✓")

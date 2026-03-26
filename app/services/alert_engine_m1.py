@@ -1,7 +1,7 @@
 """Module 1: Volume Scanner Alert Engine."""
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from app.config import settings
@@ -29,6 +29,113 @@ def inject_deps(pool, redis, alert_queue: asyncio.Queue = None):
 # key = ticker, value = {alert_id, slot, confirm_by_slot}
 _pending_confirms: dict[str, dict] = {}
 
+
+# ── Pure evaluation (no side effects) ─────────────────────────────────────
+
+def _calc_bu_pct(bar: dict) -> Optional[float]:
+    bu = bar.get("bu", 0) or 0
+    sd = bar.get("sd", 0) or 0
+    return (bu / (bu + sd) * 100) if (bu + sd) > 0 else None
+
+
+def evaluate_bar(bar: dict, avg_5d: float) -> Optional[dict]:
+    """Pure M1 evaluation — no I/O, no side effects.
+
+    Returns an evaluation dict when this bar crosses the alert threshold,
+    or None when it does not. Safe to call from historical replay paths.
+
+    Result keys: ticker, bar_time, bar_time_ict, slot, volume, ratio,
+                 in_magic, threshold, bu_pct.
+    """
+    if not avg_5d or avg_5d <= 0:
+        return None
+    try:
+        bar_time_utc: datetime = bar["bar_time"]
+        if isinstance(bar_time_utc, str):
+            bar_time_utc = datetime.fromisoformat(bar_time_utc.replace("Z", "+00:00"))
+        bar_time_ict = to_ict(bar_time_utc)
+
+        slot = get_slot(bar_time_ict.time())
+        if slot is None:
+            return None
+
+        volume = bar.get("volume") or 0
+        in_magic = is_magic_window(bar_time_ict.time())
+        threshold = settings.THRESHOLD_MAGIC if in_magic else settings.THRESHOLD_NORMAL
+
+        elapsed_seconds = bar_time_ict.second
+        if elapsed_seconds >= 10:
+            ratio = int(volume * (60 / elapsed_seconds)) / avg_5d
+        else:
+            ratio = volume / avg_5d
+
+        if ratio < threshold:
+            return None
+
+        return {
+            "ticker": bar.get("ticker"),
+            "bar_time": bar_time_utc,
+            "bar_time_ict": bar_time_ict,
+            "slot": slot,
+            "volume": volume,
+            "ratio": ratio,
+            "in_magic": in_magic,
+            "threshold": threshold,
+            "bu_pct": _calc_bu_pct(bar),
+        }
+    except Exception as e:
+        logger.debug(f"evaluate_bar error: {e}")
+        return None
+
+
+# ── Historical scan (read-only, no alerts emitted) ────────────────────────
+
+async def scan_m1_history(days: int = 25) -> list[dict]:
+    """Scan intraday_1m for bars that would trigger M1 alerts.
+
+    Uses evaluate_bar() — pure evaluation, no DB writes, no SSE, no email.
+    Requires intraday_1m to be populated (see historical_intraday_service).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT ticker, bar_time, open, high, low, close, volume, bu, sd, fb, fs, fn
+            FROM intraday_1m
+            WHERE bar_time >= $1 AND volume > 0
+            ORDER BY bar_time
+            """,
+            cutoff,
+        )
+
+    results: list[dict] = []
+    for row in rows:
+        bar = dict(row)
+        bar_time_ict = to_ict(bar["bar_time"])
+        slot = get_slot(bar_time_ict.time())
+        if slot is None:
+            continue
+        baseline = await baseline_service.get_baseline(bar["ticker"], slot)
+        if not baseline or not baseline.get("avg_5d"):
+            continue
+        result = evaluate_bar(bar, baseline["avg_5d"])
+        if result:
+            results.append({
+                "ticker": result["ticker"],
+                "bar_time": bar["bar_time"].isoformat(),
+                "slot": result["slot"],
+                "volume": result["volume"],
+                "ratio": round(result["ratio"], 3),
+                "in_magic": result["in_magic"],
+                "threshold": result["threshold"],
+                "bu_pct": round(result["bu_pct"], 1) if result["bu_pct"] is not None else None,
+            })
+
+    logger.info(f"M1 scan_history: {len(results)} hits over last {days} days")
+    return results
+
+
+# ── Live processing ────────────────────────────────────────────────────────
 
 async def process(bar: dict, is_partial: bool = False):
     """
