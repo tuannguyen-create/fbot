@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { alertsApi } from '@/lib/api'
 import { AlertStatusBadge } from '@/components/AlertStatusBadge'
+import { QualityBadge } from '@/components/QualityBadge'
 import { formatDateTimeICT, formatVolume, formatRatio, formatPct, slotToTimeStr } from '@/lib/formatters'
 import Link from 'next/link'
 
@@ -102,6 +103,7 @@ function AlertsContent() {
                   <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">Khối lượng</th>
                   <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">Tỷ lệ</th>
                   <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">BU%</th>
+                  <th className="text-center px-4 py-2 text-xs font-medium text-gray-500 uppercase">CL</th>
                   <th className="text-center px-4 py-2 text-xs font-medium text-gray-500 uppercase">Trạng thái</th>
                 </tr>
               </thead>
@@ -118,6 +120,7 @@ function AlertsContent() {
                     <td className="px-4 py-2 text-right font-mono">{formatVolume(a.volume)}</td>
                     <td className="px-4 py-2 text-right font-semibold text-orange-600">{formatRatio(a.ratio_5d)}</td>
                     <td className="px-4 py-2 text-right text-gray-600">{formatPct(a.bu_pct)}</td>
+                    <td className="px-4 py-2 text-center"><QualityBadge grade={a.quality_grade} /></td>
                     <td className="px-4 py-2 text-center"><AlertStatusBadge status={a.status} /></td>
                   </tr>
                 ))}
