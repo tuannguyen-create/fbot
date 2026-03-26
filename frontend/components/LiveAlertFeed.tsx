@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { useAlertStore } from '@/stores/alertStore'
 import { useAlertStream } from '@/hooks/useAlertStream'
 import { AlertStatusBadge } from './AlertStatusBadge'
+import { QualityBadge } from './QualityBadge'
 import { formatAlertTime, formatRatio, formatVolume, formatPct, slotToTimeStr } from '@/lib/formatters'
 import Link from 'next/link'
 
@@ -65,7 +66,10 @@ export function LiveAlertFeed() {
                 {alert.bu_pct != null && <span>BU: {formatPct(alert.bu_pct)}</span>}
               </div>
             </div>
-            <AlertStatusBadge status={alert.status} />
+            <div className="flex items-center gap-1">
+              <QualityBadge grade={alert.quality_grade} reason={alert.quality_reason} />
+              <AlertStatusBadge status={alert.status} />
+            </div>
           </Link>
         ))}
       </div>

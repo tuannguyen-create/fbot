@@ -9,6 +9,27 @@ export interface AlertSummary {
   bu_pct: number | null    // 0-100
   in_magic_window: boolean
   status: 'fired' | 'confirmed' | 'cancelled'
+  quality_grade: 'A' | 'B' | 'C' | null
+}
+
+export interface M1Features {
+  body_pct: number
+  upper_shadow_pct: number
+  lower_shadow_pct: number
+  close_pos: number
+  strong_bull_candle: boolean
+  avg_vol_20: number
+  avg_vol_50: number
+  range_pct: number
+  is_sideways_base: boolean
+  ma10: number | null
+  ma20: number | null
+  price_above_ma10: boolean | null
+  ma_stack_up: boolean
+  macd_hist: number | null
+  macd_hist_rising: boolean | null
+  quality_score: number
+  quality_reason: string
 }
 
 export interface AlertDetail extends AlertSummary {
@@ -18,6 +39,11 @@ export interface AlertDetail extends AlertSummary {
   ratio_15m: number | null
   email_sent: boolean
   cycle_event_id: number | null
+  features: M1Features | null
+  quality_score: number | null
+  quality_reason: string | null
+  strong_bull_candle: boolean | null
+  is_sideways_base: boolean | null
 }
 
 export interface AlertListParams {

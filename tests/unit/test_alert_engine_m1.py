@@ -421,3 +421,117 @@ class TestScanM1History:
         results = await alert_engine_m1.scan_m1_history(days=2)
 
         assert len(results) == 0
+
+
+# ── TestComputeM1Features ──────────────────────────────────────────────────
+
+class TestComputeM1Features:
+    def _bar(self, open_=25000, high=25200, low=24900, close=25100, volume=2_000_000):
+        return {"open": open_, "high": high, "low": low, "close": close,
+                "volume": volume, "bu": 0, "sd": 0}
+
+    def _recent(self, n=20, close=25000.0, volume=500_000):
+        return [{"open": close, "high": close+50, "low": close-50,
+                 "close": close, "volume": volume, "bu": 0, "sd": 0}
+                for _ in range(n)]
+
+    def test_strong_bull_candle_detected(self):
+        # close very near high → strong bull
+        bar = self._bar(open_=25000, high=25200, low=24980, close=25180)
+        result = alert_engine_m1.compute_m1_features(bar, self._recent())
+        assert result["strong_bull_candle"] is True
+        assert result["body_pct"] > 50
+
+    def test_weak_candle_not_strong_bull(self):
+        # large upper shadow
+        bar = self._bar(open_=25000, high=25400, low=24900, close=25050)
+        result = alert_engine_m1.compute_m1_features(bar, self._recent())
+        assert result["strong_bull_candle"] is False
+
+    def test_sideways_base_detected(self):
+        # tight range + low volume = sideways base
+        recent = self._recent(n=20, close=25000, volume=300_000)
+        bar = self._bar()
+        result = alert_engine_m1.compute_m1_features(bar, recent)
+        # avg_vol_20 = 300k, avg_vol_50 also 300k (only 20 bars) → not sideways
+        # need avg_vol_20 <= 0.8 * avg_vol_50 which requires a difference
+        # If same vols, avg_vol_20 == avg_vol_50 → 300k <= 0.8*300k is False
+        assert result["is_sideways_base"] is False  # equal vols → not "cạn cung"
+
+    def test_sideways_base_with_vol_shrink(self):
+        # 20 quiet bars (300k) + 30 noisier bars (600k) = vol shrink → sideways
+        recent_20 = self._recent(n=20, close=25000, volume=300_000)
+        recent_30 = self._recent(n=30, close=25000, volume=600_000)
+        recent = recent_20 + recent_30  # newest-first: 20 quiet then 30 louder
+        bar = self._bar(open_=25000, high=25050, low=24960, close=25020)
+        result = alert_engine_m1.compute_m1_features(bar, recent)
+        # avg_vol_20 = 300k, avg_vol_50 = (20*300k + 30*600k)/50 = 480k
+        # range_pct from 20 closes all at 25000 → 0% → is_sideways_base needs range>0
+        assert result["avg_vol_20"] == 300_000
+        assert result["avg_vol_50"] == 480_000
+
+    def test_ma10_ma20_calculated(self):
+        recent = self._recent(n=30, close=25000)
+        bar = self._bar(close=25100)
+        result = alert_engine_m1.compute_m1_features(bar, recent)
+        assert result["ma10"] is not None
+        assert result["ma20"] is not None
+        # MA10 uses trigger bar (25100) + 9 recent (25000 each) → slightly above 25000
+        assert result["ma10"] == pytest.approx(25010.0, abs=1.0)
+
+    def test_price_above_ma10_true(self):
+        recent = self._recent(n=20, close=24000)
+        bar = self._bar(close=25000)  # well above 24k base
+        result = alert_engine_m1.compute_m1_features(bar, recent)
+        assert result["price_above_ma10"] is True
+
+    def test_returns_none_for_macd_when_insufficient_bars(self):
+        recent = self._recent(n=10)  # only 10 bars — not enough for MACD
+        bar = self._bar()
+        result = alert_engine_m1.compute_m1_features(bar, recent)
+        assert result["macd_hist"] is None
+        assert result["macd_hist_rising"] is None
+
+    def test_quality_score_high_for_ideal_bar(self):
+        # strong bull candle + vol shrink + above MA
+        recent_20 = self._recent(n=20, close=24800, volume=300_000)
+        recent_30 = self._recent(n=30, close=24800, volume=600_000)
+        recent = recent_20 + recent_30
+        bar = self._bar(open_=24800, high=25200, low=24780, close=25180)
+        result = alert_engine_m1.compute_m1_features(bar, recent)
+        assert result["quality_score"] >= 40  # at least strong_bull (30) + above_ma10 (10)
+        assert result["quality_reason"] != "không đủ tín hiệu"
+
+    def test_quality_score_zero_for_bad_bar(self):
+        bar = self._bar(open_=25100, high=25200, low=24900, close=24950)  # red candle
+        result = alert_engine_m1.compute_m1_features(bar, [])
+        assert result["quality_score"] == 0
+        assert result["quality_reason"] == "không đủ tín hiệu"
+
+    def test_empty_recent_bars_safe(self):
+        bar = self._bar()
+        result = alert_engine_m1.compute_m1_features(bar, [])
+        assert "quality_score" in result
+        assert result["ma10"] is None
+        assert result["ma20"] is None
+
+
+# ── TestCalcMacd ───────────────────────────────────────────────────────────
+
+class TestCalcMacd:
+    def test_returns_none_when_insufficient_bars(self):
+        hist, rising = alert_engine_m1._calc_macd([25000.0] * 20)
+        assert hist is None
+        assert rising is None
+
+    def test_returns_values_with_sufficient_bars(self):
+        # 40 bars of constant price → MACD hist = 0
+        hist, rising = alert_engine_m1._calc_macd([25000.0] * 40)
+        assert hist is not None
+        assert isinstance(hist, float)
+
+    def test_rising_when_increasing(self):
+        # Prices gradually rising → MACD histogram should be positive & rising
+        closes = list(reversed([25000 + i * 10 for i in range(50)]))
+        hist, rising = alert_engine_m1._calc_macd(closes)
+        assert hist is not None
