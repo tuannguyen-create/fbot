@@ -426,8 +426,12 @@ async def replay_history(days: int = 25, apply: bool = False) -> list[dict]:
 
     apply=False (default): dry-run, returns candidates without writing to DB.
     apply=True: creates cycle_events for new breakouts (no notifications).
+
+    Loads extra lookback for MA20 accuracy but only returns/applies candidates
+    within the requested days window.
     """
-    cutoff = date.today() - timedelta(days=days + 15)  # calendar buffer for MA20
+    scan_start = date.today() - timedelta(days=days)
+    cutoff = date.today() - timedelta(days=days + 15)  # extra buffer for MA20
 
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
@@ -465,6 +469,10 @@ async def replay_history(days: int = 25, apply: bool = False) -> list[dict]:
         for i in range(1, len(trows)):
             today_row = trows[i]
             prev_row  = trows[i - 1]
+
+            # Skip lookback rows — only report/apply within the requested window
+            if today_row["date"] < scan_start:
+                continue
 
             if not today_row["volume"] or not prev_row["close"] or not today_row["close"]:
                 continue

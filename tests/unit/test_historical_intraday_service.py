@@ -67,17 +67,21 @@ class TestParse1mBar:
 # ── check_needs_backfill ───────────────────────────────────────────────────
 
 class TestCheckNeedsBackfill:
+    # Now checks: COUNT(DISTINCT ticker) with ≥5 days coverage.
+    # Threshold = len(WATCHLIST) // 2 = 16 (33 tickers in config).
+    # Returns True (needs backfill) when covered tickers < threshold.
+
     @pytest.mark.asyncio
     async def test_needs_backfill_when_sparse(self, mock_pool):
         pool, conn = mock_pool
-        conn.fetchval = AsyncMock(return_value=3)   # only 3 days
+        conn.fetchval = AsyncMock(return_value=3)   # only 3 tickers covered → < 16
         result = await historical_intraday_service.check_needs_backfill()
         assert result is True
 
     @pytest.mark.asyncio
     async def test_no_backfill_when_enough_data(self, mock_pool):
         pool, conn = mock_pool
-        conn.fetchval = AsyncMock(return_value=10)  # 10 days
+        conn.fetchval = AsyncMock(return_value=20)  # 20 tickers covered → ≥ 16
         result = await historical_intraday_service.check_needs_backfill()
         assert result is False
 

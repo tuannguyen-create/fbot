@@ -174,16 +174,30 @@ async def _upsert_intraday(bars: list[dict]) -> int:
 # ── Public API ─────────────────────────────────────────────────────────────
 
 async def check_needs_backfill() -> bool:
-    """Return True if intraday_1m has < 5 distinct trading days of data."""
+    """Return True if fewer than half the watchlist tickers have ≥5 days of 1m data.
+
+    Checks per-ticker coverage instead of global row count, so a situation
+    where a few tickers have dense data but most are empty still triggers a
+    backfill.
+    """
     async with _pool.acquire() as conn:
-        count = await conn.fetchval(
+        covered = await conn.fetchval(
             """
-            SELECT COUNT(DISTINCT DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh'))
-            FROM intraday_1m
-            WHERE bar_time >= NOW() - INTERVAL '30 days'
-            """
+            SELECT COUNT(DISTINCT ticker)
+            FROM (
+                SELECT ticker,
+                       COUNT(DISTINCT DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')) AS day_count
+                FROM intraday_1m
+                WHERE bar_time >= NOW() - INTERVAL '30 days'
+                  AND ticker = ANY($1)
+                GROUP BY ticker
+                HAVING COUNT(DISTINCT DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')) >= 5
+            ) t
+            """,
+            settings.WATCHLIST,
         )
-    return (count or 0) < 5
+    threshold = max(len(settings.WATCHLIST) // 2, 1)
+    return (covered or 0) < threshold
 
 
 async def backfill_intraday(days: int = 25):

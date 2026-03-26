@@ -4,6 +4,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
+from collections import defaultdict
+
 from app.config import settings
 from app.utils.timezone import to_ict
 from app.utils.trading_hours import get_slot, is_magic_window, is_trading_hours
@@ -91,47 +93,86 @@ def evaluate_bar(bar: dict, avg_5d: float) -> Optional[dict]:
 # ── Historical scan (read-only, no alerts emitted) ────────────────────────
 
 async def scan_m1_history(days: int = 25) -> list[dict]:
-    """Scan intraday_1m for bars that would trigger M1 alerts.
+    """Scan intraday_1m for bars that would trigger M1 alerts using rolling
+    historical baselines — no DB writes, no SSE, no email.
 
-    Uses evaluate_bar() — pure evaluation, no DB writes, no SSE, no email.
+    APPROXIMATION NOTICE: this evaluates completed 1m bars only. Live M1
+    uses partial mid-minute tick detection and rate projection, so this
+    will miss spikes detected intra-minute and may compute slightly different
+    ratios. Treat results as a bar-close approximation, not an exact replay.
+
+    Historical baseline (avg_5d) is computed per ticker+slot from the same
+    slot's volume over the 5 preceding calendar days in intraday_1m — not
+    from the live baseline_service (which reflects current data, not the
+    correct historical value for each bar).
+
     Requires intraday_1m to be populated (see historical_intraday_service).
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    scan_cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    # 10 extra calendar days to build a stable 5-day rolling baseline
+    lookback_cutoff = scan_cutoff - timedelta(days=10)
+
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT ticker, bar_time, open, high, low, close, volume, bu, sd, fb, fs, fn
+            SELECT ticker, bar_time, open, high, low, close, volume, bu, sd, fn
             FROM intraday_1m
             WHERE bar_time >= $1 AND volume > 0
-            ORDER BY bar_time
+            ORDER BY ticker, bar_time
             """,
-            cutoff,
+            lookback_cutoff,
         )
 
-    results: list[dict] = []
+    # Group bars by (ticker, slot) — each list is chronologically sorted
+    by_ticker_slot: dict[tuple, list] = defaultdict(list)
     for row in rows:
         bar = dict(row)
         bar_time_ict = to_ict(bar["bar_time"])
         slot = get_slot(bar_time_ict.time())
         if slot is None:
             continue
-        baseline = await baseline_service.get_baseline(bar["ticker"], slot)
-        if not baseline or not baseline.get("avg_5d"):
-            continue
-        result = evaluate_bar(bar, baseline["avg_5d"])
-        if result:
-            results.append({
-                "ticker": result["ticker"],
-                "bar_time": bar["bar_time"].isoformat(),
-                "slot": result["slot"],
-                "volume": result["volume"],
-                "ratio": round(result["ratio"], 3),
-                "in_magic": result["in_magic"],
-                "threshold": result["threshold"],
-                "bu_pct": round(result["bu_pct"], 1) if result["bu_pct"] is not None else None,
-            })
+        bar["_slot"] = slot
+        bar["_ict_date"] = bar_time_ict.date()
+        by_ticker_slot[(bar["ticker"], slot)].append(bar)
 
-    logger.info(f"M1 scan_history: {len(results)} hits over last {days} days")
+    results: list[dict] = []
+
+    for (ticker, slot), bars in by_ticker_slot.items():
+        for i, bar in enumerate(bars):
+            # Only report bars inside the requested scan window
+            if bar["bar_time"] < scan_cutoff:
+                continue
+
+            # Rolling avg_5d: volumes from the same ticker+slot over the
+            # 5 previous calendar days (days_diff in [1..7] handles weekends)
+            bar_date = bar["_ict_date"]
+            prev_vols = [
+                b["volume"] for b in bars[:i]
+                if 1 <= (bar_date - b["_ict_date"]).days <= 7 and b["volume"] > 0
+            ]
+            if len(prev_vols) < 3:
+                continue
+
+            avg_5d = sum(prev_vols[-5:]) / min(len(prev_vols), 5)
+            result = evaluate_bar(bar, avg_5d)
+            if result:
+                results.append({
+                    "ticker": ticker,
+                    "bar_time": bar["bar_time"].isoformat(),
+                    "slot": slot,
+                    "volume": result["volume"],
+                    "ratio": round(result["ratio"], 3),
+                    "avg_5d_hist": int(avg_5d),
+                    "in_magic": result["in_magic"],
+                    "threshold": result["threshold"],
+                    "bu_pct": round(result["bu_pct"], 1) if result["bu_pct"] is not None else None,
+                })
+
+    results.sort(key=lambda x: x["bar_time"])
+    logger.info(
+        f"M1 scan_history: {len(results)} hits over last {days} days "
+        f"(bar-close approx, rolling baseline)"
+    )
     return results
 
 

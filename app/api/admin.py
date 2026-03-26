@@ -44,9 +44,11 @@ async def scan_history(
     _: None = Depends(_require_admin_key),
 ):
     """Retrospective M3 scan: find breakout candidates from daily_ohlcv.
-    READ-ONLY — no cycle_events created.
+    Loads extra lookback for MA20 accuracy but only returns candidates within
+    the requested days window. READ-ONLY — no cycle_events created.
     """
-    cutoff = date.today() - timedelta(days=days + 15)  # extra buffer for MA20
+    scan_start = date.today() - timedelta(days=days)
+    cutoff = date.today() - timedelta(days=days + 15)  # extra calendar buffer for MA20
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -84,6 +86,9 @@ async def scan_history(
         for i in range(1, len(trows)):
             today_row = trows[i]
             prev_row  = trows[i - 1]
+            # Skip lookback rows — only report within the requested window
+            if today_row["date"] < scan_start:
+                continue
             if not today_row["volume"] or not prev_row["close"] or not today_row["close"]:
                 continue
             hist_vols = [r["volume"] for r in trows[:i] if r["volume"]]

@@ -344,62 +344,80 @@ class TestEvaluateBar:
 # ── TestScanM1History ──────────────────────────────────────────────────────
 
 class TestScanM1History:
+    """
+    scan_m1_history uses a rolling historical baseline (avg_5d computed from
+    same ticker+slot bars in the 5 preceding calendar days), not from
+    baseline_service. Tests set up both "lookback" and "trigger" bars.
+
+    Bar time: 03:15 UTC = 10:15 ICT → slot=75, outside magic window,
+    THRESHOLD_NORMAL = 2.0x applies.
+    """
+    def _make_bars(self, dates_and_volumes, ticker="HPG", hour=3, minute=15):
+        """Return list of bar dicts at (hour, minute) UTC for given date/volume pairs."""
+        from datetime import timezone
+        return [
+            {
+                "ticker": ticker,
+                "bar_time": datetime(d.year, d.month, d.day, hour, minute, 0, tzinfo=timezone.utc),
+                "open": 25000.0, "high": 25100.0, "low": 24900.0, "close": 25000.0,
+                "volume": vol, "bu": 0, "sd": 0, "fn": 0,
+            }
+            for d, vol in dates_and_volumes
+        ]
+
     @pytest.mark.asyncio
     async def test_returns_hits_above_threshold(self, injected_m1):
         pool, conn, redis, queue = injected_m1
-        from datetime import timezone
-        conn.fetch = AsyncMock(return_value=[
-            {
-                "ticker": "HPG",
-                "bar_time": datetime(2026, 3, 18, 2, 15, 0, tzinfo=timezone.utc),
-                "open": 25000.0, "high": 25200.0, "low": 24900.0, "close": 25100.0,
-                "volume": 2_500_000,
-                "bu": 1_500_000, "sd": 1_000_000,
-                "fb": 100_000, "fs": 50_000, "fn": 50_000,
-            }
-        ])
-        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs:
-            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
-            results = await alert_engine_m1.scan_m1_history(days=5)
+        from datetime import timezone, date, timedelta
+        # 3 lookback bars (3-5 days ago) with baseline vol 500k → avg_5d = 500k
+        # 1 trigger bar (yesterday) with 2.5M → ratio = 5.0x >> 2.0x → hit
+        today = date.today()
+        lookback = [
+            (today - timedelta(days=5), 500_000),
+            (today - timedelta(days=4), 500_000),
+            (today - timedelta(days=3), 500_000),
+        ]
+        trigger = [(today - timedelta(days=1), 2_500_000)]
+        conn.fetch = AsyncMock(return_value=self._make_bars(lookback + trigger))
+
+        results = await alert_engine_m1.scan_m1_history(days=2)
 
         assert len(results) == 1
         assert results[0]["ticker"] == "HPG"
-        assert results[0]["ratio"] == pytest.approx(2.5)
+        assert results[0]["ratio"] == pytest.approx(5.0)
+        assert results[0]["avg_5d_hist"] == 500_000
 
     @pytest.mark.asyncio
     async def test_excludes_bars_below_threshold(self, injected_m1):
         pool, conn, redis, queue = injected_m1
-        from datetime import timezone
-        conn.fetch = AsyncMock(return_value=[
-            {
-                "ticker": "HPG",
-                "bar_time": datetime(2026, 3, 18, 3, 15, 0, tzinfo=timezone.utc),  # 10:15 ICT (outside magic)
-                "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0,
-                "volume": 1_500_000,  # 1.5x < 2.0x threshold (non-magic)
-                "bu": 0, "sd": 0, "fb": 0, "fs": 0, "fn": 0,
-            }
-        ])
-        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs:
-            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
-            results = await alert_engine_m1.scan_m1_history(days=5)
+        from datetime import date, timedelta
+        # baseline 1M, trigger 1.5M → ratio 1.5x < 2.0x → no hit
+        today = date.today()
+        lookback = [
+            (today - timedelta(days=5), 1_000_000),
+            (today - timedelta(days=4), 1_000_000),
+            (today - timedelta(days=3), 1_000_000),
+        ]
+        trigger = [(today - timedelta(days=1), 1_500_000)]
+        conn.fetch = AsyncMock(return_value=self._make_bars(lookback + trigger))
+
+        results = await alert_engine_m1.scan_m1_history(days=2)
 
         assert len(results) == 0
 
     @pytest.mark.asyncio
-    async def test_skips_bars_without_baseline(self, injected_m1):
+    async def test_skips_bar_without_enough_history(self, injected_m1):
         pool, conn, redis, queue = injected_m1
-        from datetime import timezone
-        conn.fetch = AsyncMock(return_value=[
-            {
-                "ticker": "HPG",
-                "bar_time": datetime(2026, 3, 18, 2, 15, 0, tzinfo=timezone.utc),
-                "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0,
-                "volume": 5_000_000,
-                "bu": 0, "sd": 0, "fb": 0, "fs": 0, "fn": 0,
-            }
-        ])
-        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs:
-            mock_bs.get_baseline = AsyncMock(return_value=None)
-            results = await alert_engine_m1.scan_m1_history(days=5)
+        from datetime import date, timedelta
+        # Only 2 previous bars at same slot — fewer than 3 needed → bar skipped
+        today = date.today()
+        lookback = [
+            (today - timedelta(days=4), 1_000_000),
+            (today - timedelta(days=3), 1_000_000),
+        ]
+        trigger = [(today - timedelta(days=1), 5_000_000)]
+        conn.fetch = AsyncMock(return_value=self._make_bars(lookback + trigger))
+
+        results = await alert_engine_m1.scan_m1_history(days=2)
 
         assert len(results) == 0
