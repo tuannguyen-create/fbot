@@ -1,6 +1,7 @@
 """Module 3: Cycle Analysis Alert Engine (meeting-goc v1.5)."""
 import asyncio
 import logging
+import uuid
 from collections import defaultdict
 from datetime import date, timedelta
 from statistics import mean
@@ -8,7 +9,7 @@ from typing import Optional
 
 from app.config import settings
 from app.utils.trading_hours import is_trading_day, count_trading_days_between, add_trading_days
-from app.services import notification
+from app.services import notification, universe_service
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +136,8 @@ async def run_daily():
         return
 
     logger.info("M3 daily analysis started")
-    for ticker in settings.WATCHLIST:
+    tickers = await universe_service.get_active_tickers()
+    for ticker in tickers:
         try:
             await _analyze_ticker(ticker)
         except Exception as e:
@@ -225,6 +227,8 @@ async def _create_cycle(
     price_chg: float = 0.0,
     alert_id: Optional[int] = None,
     notify: bool = True,
+    origin: str = "live",
+    replay_run_id=None,
 ):
     est_dist_days = 20
     breakout_date = today_row["date"]
@@ -265,9 +269,13 @@ async def _create_cycle(
                  estimated_dist_days, days_remaining, predicted_bottom_date, phase,
                  game_type, rewatch_window_start, rewatch_window_end,
                  phase_reason, breakout_zone_low, breakout_zone_high,
-                 source_alert_id, source_alert_inferred)
+                 source_alert_id, source_alert_inferred,
+                 origin, replay_run_id, replayed_at, is_actionable)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-                    $9, $10, $11, $12, $13, $14, $15, FALSE)
+                    $9, $10, $11, $12, $13, $14, $15, FALSE,
+                    $16, $17,
+                    CASE WHEN $16 <> 'live' THEN NOW() ELSE NULL END,
+                    TRUE)
             RETURNING id
             """,
             ticker,
@@ -285,6 +293,8 @@ async def _create_cycle(
             zone_low,
             zone_high,
             resolved_alert_id,
+            origin,
+            replay_run_id,
         )
 
     logger.info(
@@ -417,7 +427,12 @@ async def _update_cycle(ticker: str, cycle: dict, recent_rows: list, ma20: float
 
 # ── Historical M3 replay ───────────────────────────────────────────────────
 
-async def replay_history(days: int = 25, apply: bool = False) -> list[dict]:
+async def replay_history(
+    days: int = 25,
+    apply: bool = False,
+    mode: str = "manual",
+    notify_mode: str = "none",
+) -> dict:
     """Replay M3 breakout detection over historical daily_ohlcv.
 
     Iterates each ticker's daily rows chronologically and applies the same
@@ -425,27 +440,50 @@ async def replay_history(days: int = 25, apply: bool = False) -> list[dict]:
     cycle_events so running with apply=True multiple times is idempotent.
 
     apply=False (default): dry-run, returns candidates without writing to DB.
-    apply=True: creates cycle_events for new breakouts (no notifications).
+    apply=True: creates cycle_events with origin='historical_replay' (no per-cycle
+                notifications). Optionally sends a single digest via notify_mode.
 
     Loads extra lookback for MA20 accuracy but only returns/applies candidates
     within the requested days window.
+
+    Returns dict with keys: candidates, run_id, created_count.
     """
     scan_start = date.today() - timedelta(days=days)
     cutoff = date.today() - timedelta(days=days + 15)  # extra buffer for MA20
 
+    run_id = uuid.uuid4()
+    if apply:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO replay_runs
+                    (id, module, mode, date_from, date_to, apply,
+                     notify_mode, status, started_at)
+                VALUES ($1, 'm3', $2, $3, $4, TRUE, $5, 'running', NOW())
+                """,
+                run_id, mode, scan_start, date.today() - timedelta(days=1), notify_mode,
+            )
+
+    tickers = await universe_service.get_active_tickers()
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
             """
             SELECT ticker, date, open, high, low, close, volume
             FROM daily_ohlcv
             WHERE date >= $1
+              AND ticker = ANY($2)
             ORDER BY ticker, date ASC
             """,
-            cutoff,
+            cutoff, tickers,
         )
         existing = await conn.fetch(
-            "SELECT ticker, breakout_date FROM cycle_events WHERE breakout_date >= $1",
-            cutoff,
+            """
+            SELECT ticker, breakout_date
+            FROM cycle_events
+            WHERE breakout_date >= $1
+              AND ticker = ANY($2)
+            """,
+            cutoff, tickers,
         )
 
     existing_set = {(r["ticker"], r["breakout_date"]) for r in existing}
@@ -457,7 +495,7 @@ async def replay_history(days: int = 25, apply: bool = False) -> list[dict]:
     candidates: list[dict] = []
     created_count = 0
 
-    for ticker in settings.WATCHLIST:
+    for ticker in tickers:
         trows = by_ticker.get(ticker, [])
         if len(trows) < 2:
             continue
@@ -512,6 +550,8 @@ async def replay_history(days: int = 25, apply: bool = False) -> list[dict]:
                         ticker, today_row, ma20, meta["game_type"],
                         vol_ratio=vol_ratio, price_chg=price_chg,
                         alert_id=None, notify=False,
+                        origin="historical_replay",
+                        replay_run_id=run_id,
                     )
                     candidate["created"] = True
                     created_count += 1
@@ -522,8 +562,24 @@ async def replay_history(days: int = 25, apply: bool = False) -> list[dict]:
 
             candidates.append(candidate)
 
+    if apply:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE replay_runs
+                SET status='done', finished_at=NOW(), created_count=$2
+                WHERE id=$1
+                """,
+                run_id, created_count,
+            )
+        if notify_mode == "digest":
+            await notification.send_m3_replay_digest(
+                run_id=str(run_id), days=days, candidates=candidates,
+                created=created_count, mode=mode,
+            )
+
     logger.info(
         f"M3 replay_history: {len(candidates)} candidates "
         f"({sum(1 for c in candidates if c['is_new'])} new, {created_count} created)"
     )
-    return candidates
+    return {"candidates": candidates, "run_id": str(run_id), "created_count": created_count}

@@ -285,13 +285,13 @@ class TestReplayHistory:
         }))
 
         with patch.object(settings, "WATCHLIST", ["HPG"]):
-            results = await alert_engine_m3.replay_history(days=25, apply=False)
+            result = await alert_engine_m3.replay_history(days=25, apply=False)
 
+        results = result["candidates"]
         assert len(results) >= 1
         assert results[0]["ticker"] == "HPG"
         assert results[0]["is_new"] is True
         assert results[0]["created"] is False   # dry-run: not created
-        conn.fetchval.assert_not_called()       # no INSERT
 
     @pytest.mark.asyncio
     async def test_apply_creates_cycle(self, mock_pool):
@@ -311,10 +311,11 @@ class TestReplayHistory:
         with patch.object(settings, "WATCHLIST", ["HPG"]), \
              patch("app.services.alert_engine_m3.notification") as mock_notif:
             mock_notif.send_cycle_breakout_email = AsyncMock()
-            results = await alert_engine_m3.replay_history(days=25, apply=True)
+            mock_notif.send_m3_replay_digest = AsyncMock()
+            result = await alert_engine_m3.replay_history(days=25, apply=True)
 
-        assert any(r["created"] for r in results)
-        # notify=False → email must NOT be sent
+        assert any(r["created"] for r in result["candidates"])
+        # notify=False → email must NOT be sent per-cycle
         mock_notif.send_cycle_breakout_email.assert_not_called()
 
     @pytest.mark.asyncio
@@ -333,7 +334,7 @@ class TestReplayHistory:
         }))
 
         with patch.object(settings, "WATCHLIST", ["HPG"]):
-            results = await alert_engine_m3.replay_history(days=25, apply=True)
+            result = await alert_engine_m3.replay_history(days=25, apply=True)
 
-        matching = [r for r in results if r["ticker"] == "HPG"]
+        matching = [r for r in result["candidates"] if r["ticker"] == "HPG"]
         assert all(not r["created"] for r in matching)

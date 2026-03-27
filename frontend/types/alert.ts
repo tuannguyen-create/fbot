@@ -10,6 +10,8 @@ export interface AlertSummary {
   in_magic_window: boolean
   status: 'fired' | 'confirmed' | 'cancelled'
   quality_grade: 'A' | 'B' | 'C' | null
+  origin: 'live' | 'historical_replay' | 'recovery_replay'
+  is_actionable: boolean
 }
 
 export interface M1Features {
@@ -44,10 +46,13 @@ export interface AlertDetail extends AlertSummary {
   quality_reason: string | null
   strong_bull_candle: boolean | null
   is_sideways_base: boolean | null
+  replay_run_id: string | null
+  replayed_at: string | null
 }
 
 export interface AlertListParams {
   ticker?: string
+  origin?: 'live' | 'historical_replay' | 'recovery_replay'
   date_from?: string
   date_to?: string
   status?: string

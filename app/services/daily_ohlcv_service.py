@@ -4,10 +4,12 @@ import logging
 from datetime import date, datetime, timezone
 
 from app.config import settings
+from app.services import universe_service
 
 logger = logging.getLogger(__name__)
 
 _pool = None
+_FETCH_BATCH_SIZE = 200
 
 
 def inject_deps(pool):
@@ -135,13 +137,25 @@ async def backfill_historical(days: int = 25):
     Called at startup to bootstrap M3 analysis.
     Falls back silently if FiinQuantX API is unavailable.
     """
-    logger.info(f"Starting daily OHLCV backfill (last {days} days)")
+    tickers = await universe_service.get_active_tickers(force_refresh=True)
+    if not tickers:
+        logger.warning("Skipping daily OHLCV backfill: active universe is empty")
+        return
+
+    logger.info(f"Starting daily OHLCV backfill (last {days} days) for {len(tickers)} active tickers")
     loop = asyncio.get_running_loop()
-    bars = await loop.run_in_executor(
-        None, lambda: _fetch_historical_blocking(settings.WATCHLIST, days)
-    )
-    count = await _persist_bars(bars)
-    logger.info(f"Daily OHLCV backfill complete: {count} rows upserted")
+    total_count = 0
+    for i in range(0, len(tickers), _FETCH_BATCH_SIZE):
+        batch = tickers[i:i + _FETCH_BATCH_SIZE]
+        bars = await loop.run_in_executor(
+            None, lambda batch=batch: _fetch_historical_blocking(batch, days)
+        )
+        total_count += await _persist_bars(bars)
+        logger.info(
+            f"Daily OHLCV backfill batch {i // _FETCH_BATCH_SIZE + 1}: "
+            f"{len(batch)} tickers, {len(bars)} rows"
+        )
+    logger.info(f"Daily OHLCV backfill complete: {total_count} rows upserted")
 
 
 async def aggregate_today():

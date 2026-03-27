@@ -67,7 +67,7 @@ export function LiveAlertFeed() {
               </div>
             </div>
             <div className="flex items-center gap-1">
-              <QualityBadge grade={alert.quality_grade} reason={alert.quality_reason} />
+              <QualityBadge grade={alert.quality_grade} />
               <AlertStatusBadge status={alert.status} />
             </div>
           </Link>

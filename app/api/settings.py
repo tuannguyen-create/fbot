@@ -7,7 +7,7 @@ import asyncpg
 
 from app.config import settings as app_settings
 from app.database import get_db
-from app.services import stream_ingester
+from app.services import stream_ingester, universe_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -28,6 +28,7 @@ async def _get_db_settings(conn) -> dict:
 async def get_settings(pool: asyncpg.Pool = Depends(get_db)):
     async with pool.acquire() as conn:
         db_cfg = await _get_db_settings(conn)
+    active_tickers = await universe_service.get_active_tickers()
 
     return {
         "success": True,
@@ -38,7 +39,7 @@ async def get_settings(pool: asyncpg.Pool = Depends(get_db)):
             "breakout_vol_mult": float(db_cfg.get("breakout_vol_mult", app_settings.BREAKOUT_VOL_MULT)),
             "breakout_price_pct": float(db_cfg.get("breakout_price_pct", app_settings.BREAKOUT_PRICE_PCT)),
             "alert_days_before_cycle": int(db_cfg.get("alert_days_before_cycle", app_settings.ALERT_DAYS_BEFORE_CYCLE)),
-            "watchlist_count": len(app_settings.WATCHLIST),
+            "watchlist_count": len(active_tickers),
             "stream_status": stream_ingester.get_status(),
         },
     }
