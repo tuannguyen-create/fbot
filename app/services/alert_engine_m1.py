@@ -178,6 +178,46 @@ async def scan_m1_history(days: int = 25) -> list[dict]:
     return results
 
 
+async def _settle_historical_alert(
+    conn,
+    alert_id: int,
+    hit: dict,
+    bar_time: datetime,
+) -> None:
+    """Compute confirmed/cancelled for a historical alert from intraday_1m data.
+
+    Mirrors _check_confirmations() but reads from intraday_1m instead of
+    accumulating live bars.  Uses the rolling historical avg_5d from the
+    hit dict (avg_5d_hist), not the current live baseline.
+    """
+    window_end = bar_time + timedelta(minutes=15)
+    bars = await conn.fetch(
+        """
+        SELECT volume FROM intraday_1m
+        WHERE ticker=$1 AND bar_time >= $2 AND bar_time < $3
+          AND volume > 0
+        ORDER BY bar_time
+        """,
+        hit["ticker"], bar_time, window_end,
+    )
+    if not bars:
+        return
+    cumulative = sum(r["volume"] for r in bars)
+    elapsed_slots = len(bars)
+    avg_5d = hit.get("avg_5d_hist", 0)
+    expected_15m = avg_5d * elapsed_slots if avg_5d else 1
+    ratio_15m = cumulative / expected_15m if expected_15m > 0 else 0
+    status = "confirmed" if ratio_15m >= settings.THRESHOLD_CONFIRM_15M else "cancelled"
+    await conn.execute(
+        """
+        UPDATE volume_alerts
+        SET status=$1, confirmed_at=NOW(), ratio_15m=$2
+        WHERE id=$3
+        """,
+        status, round(ratio_15m, 4), alert_id,
+    )
+
+
 async def replay_m1_history(
     days: int = 25,
     apply: bool = False,
@@ -244,6 +284,7 @@ async def replay_m1_history(
                 )
                 if inserted_id is not None:
                     created_count += 1
+                    await _settle_historical_alert(conn, inserted_id, hit, bar_time)
                 else:
                     skipped_count += 1
 

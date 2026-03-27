@@ -136,7 +136,7 @@ function AlertsContent() {
                       </Link>
                       <OriginBadge origin={a.origin} className="ml-1.5" />
                     </td>
-                    <td className="px-4 py-2 text-gray-500">{formatDateTimeICT(a.fired_at)}</td>
+                    <td className="px-4 py-2 text-gray-500">{formatDateTimeICT(a.bar_time ?? a.fired_at)}</td>
                     <td className="px-4 py-2 text-right font-mono">{formatVolume(a.volume)}</td>
                     <td className="px-4 py-2 text-right font-semibold text-orange-600">{formatRatio(a.ratio_5d)}</td>
                     <td className="px-4 py-2 text-right text-gray-600">{formatPct(a.bu_pct)}</td>
