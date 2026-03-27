@@ -14,12 +14,14 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from app.config import settings
-from app.services import baseline_service
+from app.services import baseline_service, universe_service
 
 logger = logging.getLogger(__name__)
 
 _pool = None
 _ICT = ZoneInfo("Asia/Ho_Chi_Minh")
+_FETCH_BATCH_SIZE = 100
+_UPSERT_BATCH_SIZE = 5000
 
 
 def inject_deps(pool):
@@ -154,19 +156,20 @@ async def _upsert_intraday(bars: list[dict]) -> int:
         for b in bars
     ]
     async with _pool.acquire() as conn:
-        await conn.executemany(
-            """
-            INSERT INTO intraday_1m
-                (ticker, bar_time, open, high, low, close, volume, bu, sd, fb, fs, fn)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            ON CONFLICT (ticker, bar_time) DO UPDATE SET
-                open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
-                close=EXCLUDED.close, volume=EXCLUDED.volume,
-                bu=EXCLUDED.bu, sd=EXCLUDED.sd, fb=EXCLUDED.fb,
-                fs=EXCLUDED.fs, fn=EXCLUDED.fn
-            """,
-            rows,
-        )
+        for i in range(0, len(rows), _UPSERT_BATCH_SIZE):
+            await conn.executemany(
+                """
+                INSERT INTO intraday_1m
+                    (ticker, bar_time, open, high, low, close, volume, bu, sd, fb, fs, fn)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT (ticker, bar_time) DO UPDATE SET
+                    open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
+                    close=EXCLUDED.close, volume=EXCLUDED.volume,
+                    bu=EXCLUDED.bu, sd=EXCLUDED.sd, fb=EXCLUDED.fb,
+                    fs=EXCLUDED.fs, fn=EXCLUDED.fn
+                """,
+                rows[i:i + _UPSERT_BATCH_SIZE],
+            )
     logger.info(f"intraday_1m upserted {len(rows)} bars")
     return len(rows)
 
@@ -180,6 +183,9 @@ async def check_needs_backfill() -> bool:
     where a few tickers have dense data but most are empty still triggers a
     backfill.
     """
+    tickers = await universe_service.get_active_tickers()
+    if not tickers:
+        return False
     async with _pool.acquire() as conn:
         covered = await conn.fetchval(
             """
@@ -194,9 +200,9 @@ async def check_needs_backfill() -> bool:
                 HAVING COUNT(DISTINCT DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')) >= 5
             ) t
             """,
-            settings.WATCHLIST,
+            tickers,
         )
-    threshold = max(len(settings.WATCHLIST) // 2, 1)
+    threshold = max(len(tickers) // 2, 1)
     return (covered or 0) < threshold
 
 
@@ -212,15 +218,30 @@ async def backfill_intraday(days: int = 25):
     to_date = date.today() - timedelta(days=1)        # up to yesterday
     from_date = to_date - timedelta(days=days + 10)   # calendar buffer
 
-    logger.info(f"Starting 1m intraday backfill: {from_date} → {to_date}")
-    loop = asyncio.get_running_loop()
-    bars = await loop.run_in_executor(
-        None, lambda: _fetch_1m_blocking(settings.WATCHLIST, from_date, to_date)
-    )
-    count = await _upsert_intraday(bars)
+    tickers = await universe_service.get_active_tickers(force_refresh=True)
+    if not tickers:
+        logger.warning("Skipping 1m intraday backfill: active universe is empty")
+        return
 
-    if count > 0:
+    logger.info(
+        f"Starting 1m intraday backfill: {from_date} → {to_date} "
+        f"for {len(tickers)} active tickers"
+    )
+    loop = asyncio.get_running_loop()
+    total_count = 0
+    for i in range(0, len(tickers), _FETCH_BATCH_SIZE):
+        batch = tickers[i:i + _FETCH_BATCH_SIZE]
+        bars = await loop.run_in_executor(
+            None, lambda batch=batch: _fetch_1m_blocking(batch, from_date, to_date)
+        )
+        total_count += await _upsert_intraday(bars)
+        logger.info(
+            f"Intraday backfill batch {i // _FETCH_BATCH_SIZE + 1}: "
+            f"{len(batch)} tickers, {len(bars)} bars"
+        )
+
+    if total_count > 0:
         await baseline_service.rebuild_all(force=True)
-        logger.info(f"Intraday backfill complete: {count} bars, baselines rebuilt")
+        logger.info(f"Intraday backfill complete: {total_count} bars, baselines rebuilt")
     else:
         logger.warning("Intraday backfill: 0 bars fetched — FiinQuantX may be unavailable")

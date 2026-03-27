@@ -9,7 +9,7 @@ from typing import Optional
 
 from app.config import settings
 from app.utils.trading_hours import is_trading_day, count_trading_days_between, add_trading_days
-from app.services import notification
+from app.services import notification, universe_service
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,8 @@ async def run_daily():
         return
 
     logger.info("M3 daily analysis started")
-    for ticker in settings.WATCHLIST:
+    tickers = await universe_service.get_active_tickers()
+    for ticker in tickers:
         try:
             await _analyze_ticker(ticker)
         except Exception as e:
@@ -463,19 +464,26 @@ async def replay_history(
                 run_id, mode, scan_start, date.today() - timedelta(days=1), notify_mode,
             )
 
+    tickers = await universe_service.get_active_tickers()
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
             """
             SELECT ticker, date, open, high, low, close, volume
             FROM daily_ohlcv
             WHERE date >= $1
+              AND ticker = ANY($2)
             ORDER BY ticker, date ASC
             """,
-            cutoff,
+            cutoff, tickers,
         )
         existing = await conn.fetch(
-            "SELECT ticker, breakout_date FROM cycle_events WHERE breakout_date >= $1",
-            cutoff,
+            """
+            SELECT ticker, breakout_date
+            FROM cycle_events
+            WHERE breakout_date >= $1
+              AND ticker = ANY($2)
+            """,
+            cutoff, tickers,
         )
 
     existing_set = {(r["ticker"], r["breakout_date"]) for r in existing}
@@ -487,7 +495,7 @@ async def replay_history(
     candidates: list[dict] = []
     created_count = 0
 
-    for ticker in settings.WATCHLIST:
+    for ticker in tickers:
         trows = by_ticker.get(ticker, [])
         if len(trows) < 2:
             continue

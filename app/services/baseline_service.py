@@ -5,7 +5,7 @@ from statistics import mean, stdev
 from collections import defaultdict
 from typing import Optional
 
-from app.config import settings
+from app.services import universe_service
 from app.utils.trading_hours import get_slot, is_trading_day
 
 logger = logging.getLogger(__name__)
@@ -43,8 +43,9 @@ async def rebuild_all(force: bool = False):
     if not force and not is_trading_day(date.today()):
         logger.info("Skipping baseline rebuild (non-trading day)")
         return
-    logger.info(f"Starting baseline rebuild for {len(settings.WATCHLIST)} tickers")
-    for ticker in settings.WATCHLIST:
+    tickers = await universe_service.get_active_tickers()
+    logger.info(f"Starting baseline rebuild for {len(tickers)} active tickers")
+    for ticker in tickers:
         try:
             await rebuild_ticker(ticker)
         except Exception as e:

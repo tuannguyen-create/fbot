@@ -21,7 +21,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from app.config import settings
-from app.services import alert_engine_m1, baseline_service
+from app.services import alert_engine_m1, baseline_service, universe_service
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +49,9 @@ _PROACTIVE_RESTART_WAIT = 90
 # Timezone constant (all ticks arrive as ICT without tz info)
 _ICT = ZoneInfo("Asia/Ho_Chi_Minh")
 
-# Watchlist as frozenset for O(1) membership checks (called on every tick)
-_WATCHLIST_SET = frozenset(settings.WATCHLIST)
+# Active ticker universe. Refreshed from watchlist DB before each stream session.
+_ACTIVE_TICKERS = tuple(settings.WATCHLIST)
+_WATCHLIST_SET = frozenset(_ACTIVE_TICKERS)
 
 # ── Tick aggregation state ──────────────────────────────────────────────────
 # Per-ticker running 1-minute bar accumulator
@@ -81,6 +82,21 @@ def inject_deps(pool, redis, alert_queue: asyncio.Queue):
     _redis = redis
     _alert_queue = alert_queue
     alert_engine_m1.inject_deps(pool, redis, alert_queue)
+
+
+async def _refresh_active_tickers():
+    """Refresh stream ticker universe from watchlist DB."""
+    global _ACTIVE_TICKERS, _WATCHLIST_SET
+    tickers = await universe_service.get_active_tickers(force_refresh=True)
+    normalized = tuple(str(t).upper() for t in tickers if t)
+    if not normalized:
+        normalized = tuple(settings.WATCHLIST)
+    if normalized != _ACTIVE_TICKERS:
+        logger.info(
+            f"Active stream universe updated: {len(_ACTIVE_TICKERS)} → {len(normalized)} tickers"
+        )
+    _ACTIVE_TICKERS = normalized
+    _WATCHLIST_SET = frozenset(_ACTIVE_TICKERS)
 
 
 def get_status() -> str:
@@ -306,7 +322,7 @@ async def _process_bar(bar: dict):
     """Completed 1m bar: save to DB and run M1 alert engine."""
     try:
         ticker = bar["ticker"]
-        if ticker not in settings.WATCHLIST:
+        if ticker not in _WATCHLIST_SET:
             return
         await _save_bar(bar)
         await alert_engine_m1.process(bar)  # is_partial=False → confirm accumulator runs
@@ -322,7 +338,7 @@ async def _process_partial(bar: dict):
     to the pending confirm accumulator, inflating the 15-min ratio 2-4x.
     """
     try:
-        if bar.get("ticker") not in settings.WATCHLIST:
+        if bar.get("ticker") not in _WATCHLIST_SET:
             return
         await alert_engine_m1.process(bar, is_partial=True)
     except Exception as e:
@@ -442,11 +458,11 @@ def _stream_blocking():
     ).login()
 
     _event = _client.Trading_Data_Stream(
-        tickers=settings.WATCHLIST,
+        tickers=list(_ACTIVE_TICKERS),
         callback=_on_tick_raw,
     )
     _stream_connected = True
-    logger.info(f"FiinQuantX tick stream started for {len(settings.WATCHLIST)} tickers")
+    logger.info(f"FiinQuantX tick stream started for {len(_ACTIVE_TICKERS)} tickers")
     _event.start()
 
     # Fix 5: block on our own threading.Event instead of polling _event._stop
@@ -542,6 +558,7 @@ async def start():
         run_start = _loop.time()
         refresh_task = asyncio.create_task(_proactive_restart_timer())
         try:
+            await _refresh_active_tickers()
             logger.info(f"FiinQuantX tick stream starting (attempt {attempt})")
             await _loop.run_in_executor(None, _stream_blocking)
             logger.info("FiinQuantX tick stream disconnected")

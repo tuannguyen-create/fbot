@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from app.config import settings
 from app.database import get_db
+from app.services import universe_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -49,6 +50,7 @@ async def scan_history(
     """
     scan_start = date.today() - timedelta(days=days)
     cutoff = date.today() - timedelta(days=days + 15)  # extra calendar buffer for MA20
+    tickers = await universe_service.get_active_tickers()
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -58,7 +60,7 @@ async def scan_history(
             WHERE ticker = ANY($1) AND date >= $2
             ORDER BY ticker, date ASC
             """,
-            settings.WATCHLIST,
+            tickers,
             cutoff,
         )
         existing = await conn.fetch(
@@ -79,7 +81,7 @@ async def scan_history(
         by_ticker[r["ticker"]].append(dict(r))
 
     candidates = []
-    for ticker in settings.WATCHLIST:
+    for ticker in tickers:
         trows = by_ticker.get(ticker, [])
         if len(trows) < 2:
             continue
@@ -122,7 +124,7 @@ async def scan_history(
             "breakout_candidates": candidates,
             "total": len(candidates),
             "tickers_with_data": len(by_ticker),
-            "tickers_no_data": [t for t in settings.WATCHLIST if t not in by_ticker],
+            "tickers_no_data": [t for t in tickers if t not in by_ticker],
             "days_scanned": days,
             "thresholds": {
                 "vol_mult": settings.BREAKOUT_VOL_MULT,

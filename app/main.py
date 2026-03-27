@@ -56,12 +56,43 @@ async def _seed_watchlist(pool):
     logger.info(f"Watchlist seeded: {len(rows)} tickers")
 
 
+async def _maybe_bootstrap_historical_replays(pool):
+    """Seed historical M1/M3 into UI tables once when no replay rows exist yet."""
+    from app.services import alert_engine_m1, alert_engine_m3
+
+    async with pool.acquire() as conn:
+        m1_hist_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM volume_alerts WHERE origin <> 'live'"
+        )
+        m3_hist_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM cycle_events WHERE origin <> 'live'"
+        )
+
+    if (m1_hist_count or 0) == 0:
+        logger.info("No historical M1 alerts found — bootstrapping 25-day M1 replay")
+        await alert_engine_m1.replay_m1_history(
+            days=25,
+            apply=True,
+            mode="bootstrap",
+            notify_mode="digest",
+        )
+
+    if (m3_hist_count or 0) == 0:
+        logger.info("No historical M3 cycles found — bootstrapping 25-day M3 replay")
+        await alert_engine_m3.replay_history(
+            days=25,
+            apply=True,
+            mode="bootstrap",
+            notify_mode="digest",
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup & shutdown logic."""
     # --- STARTUP ---
     from app import database, redis_client
-    from app.services import baseline_service, notification, stream_ingester
+    from app.services import baseline_service, notification, stream_ingester, universe_service
     from app.services import alert_engine_m1, alert_engine_m3
     from app.services import market_calendar, daily_ohlcv_service
     from app.services import historical_intraday_service
@@ -99,6 +130,7 @@ async def lifespan(app: FastAPI):
     alert_engine_m3.inject_deps(pool, redis, alert_queue)
     daily_ohlcv_service.inject_deps(pool)
     historical_intraday_service.inject_deps(pool)
+    universe_service.inject_deps(pool)
 
     # 6. Warm in-memory baseline cache + first-run backfill
     await baseline_service.warm_cache()
@@ -126,6 +158,7 @@ async def lifespan(app: FastAPI):
         if await historical_intraday_service.check_needs_backfill():
             logger.info("intraday_1m sparse — running 1m historical backfill")
             await historical_intraday_service.backfill_intraday()
+        await _maybe_bootstrap_historical_replays(pool)
     backfill_task = asyncio.create_task(_delayed_backfill())
 
     logger.info("fbot backend started ✓")
