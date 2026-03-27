@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -157,6 +158,11 @@ async def scan_m1_history(days: int = 25) -> list[dict]:
             avg_5d = sum(prev_vols[-5:]) / min(len(prev_vols), 5)
             result = evaluate_bar(bar, avg_5d)
             if result:
+                # Compute quality features from preceding bars (newest-first)
+                recent = list(reversed(bars[:i]))[:50]
+                features = compute_m1_features(bar, recent)
+                q_score = features["quality_score"]
+                q_grade = "A" if q_score >= 70 else "B" if q_score >= 40 else "C"
                 results.append({
                     "ticker": ticker,
                     "bar_time": bar["bar_time"].isoformat(),
@@ -167,6 +173,13 @@ async def scan_m1_history(days: int = 25) -> list[dict]:
                     "in_magic": result["in_magic"],
                     "threshold": result["threshold"],
                     "bu_pct": round(result["bu_pct"], 1) if result["bu_pct"] is not None else None,
+                    "foreign_net": bar.get("fn"),
+                    "quality_score": q_score,
+                    "quality_grade": q_grade,
+                    "quality_reason": features["quality_reason"],
+                    "strong_bull_candle": features["strong_bull_candle"],
+                    "is_sideways_base": features["is_sideways_base"],
+                    "features": features,
                 })
 
     results.sort(key=lambda x: x["bar_time"])
@@ -175,6 +188,166 @@ async def scan_m1_history(days: int = 25) -> list[dict]:
         f"(bar-close approx, rolling baseline)"
     )
     return results
+
+
+async def _settle_historical_alert(
+    conn,
+    alert_id: int,
+    hit: dict,
+    bar_time: datetime,
+) -> None:
+    """Compute confirmed/cancelled for a historical alert from intraday_1m data.
+
+    Mirrors _check_confirmations() but reads from intraday_1m instead of
+    accumulating live bars.  Uses the rolling historical avg_5d from the
+    hit dict (avg_5d_hist), not the current live baseline.
+    """
+    window_end = bar_time + timedelta(minutes=15)
+    bars = await conn.fetch(
+        """
+        SELECT volume FROM intraday_1m
+        WHERE ticker=$1 AND bar_time >= $2 AND bar_time < $3
+          AND volume > 0
+        ORDER BY bar_time
+        """,
+        hit["ticker"], bar_time, window_end,
+    )
+    if not bars:
+        return
+    cumulative = sum(r["volume"] for r in bars)
+    elapsed_slots = len(bars)
+    avg_5d = hit.get("avg_5d_hist", 0)
+    expected_15m = avg_5d * elapsed_slots if avg_5d else 1
+    ratio_15m = cumulative / expected_15m if expected_15m > 0 else 0
+    status = "confirmed" if ratio_15m >= settings.THRESHOLD_CONFIRM_15M else "cancelled"
+    # confirmed_at = end of the historical 15-min window (bar_time + 15min),
+    # NOT NOW() — so the UI shows the actual market time of confirmation,
+    # not the time the replay job ran.
+    await conn.execute(
+        """
+        UPDATE volume_alerts
+        SET status=$1, confirmed_at=$2, ratio_15m=$3
+        WHERE id=$4
+        """,
+        status, window_end, round(ratio_15m, 4), alert_id,
+    )
+
+
+async def replay_m1_history(
+    days: int = 25,
+    apply: bool = False,
+    mode: str = "bootstrap",
+    notify_mode: str = "none",
+) -> dict:
+    """Persist historical M1 hits with origin='historical_replay'.
+
+    Calls scan_m1_history() for rolling-baseline detection, then optionally
+    inserts each hit into volume_alerts with:
+      - origin = 'historical_replay' (or 'recovery_replay' if mode='recovery')
+      - is_actionable = FALSE
+      - No SSE push, no per-item Telegram/email
+
+    Idempotent: existing alert at same ticker+slot+ICT-date is skipped.
+
+    APPROXIMATION NOTICE: bar-close volume only, not mid-minute tick detection.
+    Use as research/audit/recovery layer — not as a source of live alerts.
+    """
+    from datetime import date, timedelta
+
+    run_origin = "recovery_replay" if mode == "recovery" else "historical_replay"
+    run_id = uuid.uuid4()
+    date_from = date.today() - timedelta(days=days + 10)
+    date_to   = date.today() - timedelta(days=1)
+
+    if apply:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO replay_runs
+                    (id, module, mode, date_from, date_to, apply,
+                     notify_mode, status, started_at)
+                VALUES ($1, 'm1', $2, $3, $4, TRUE, $5, 'running', NOW())
+                """,
+                run_id, mode, date_from, date_to, notify_mode,
+            )
+
+    hits = await scan_m1_history(days=days)
+    created_count = 0
+    skipped_count = 0
+
+    if apply and hits:
+        async with _pool.acquire() as conn:
+            for hit in hits:
+                bar_time = datetime.fromisoformat(hit["bar_time"])
+                inserted_id = await conn.fetchval(
+                    """
+                    INSERT INTO volume_alerts
+                        (ticker, slot, bar_time, volume, baseline_5d, ratio_5d, bu_pct,
+                         foreign_net, in_magic_window, status,
+                         features, quality_score, quality_grade, quality_reason,
+                         strong_bull_candle, is_sideways_base,
+                         origin, replay_run_id, replayed_at, is_actionable)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7,
+                            $8, $9, 'fired',
+                            $10::jsonb, $11, $12, $13,
+                            $14, $15,
+                            $16, $17, NOW(), FALSE)
+                    ON CONFLICT (ticker, slot,
+                        (DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')))
+                    DO NOTHING
+                    RETURNING id
+                    """,
+                    hit["ticker"], hit["slot"], bar_time,
+                    hit["volume"], hit.get("avg_5d_hist"), hit["ratio"], hit.get("bu_pct"),
+                    hit.get("foreign_net"),
+                    hit.get("in_magic", False),
+                    json.dumps(hit["features"]) if hit.get("features") else None,
+                    hit.get("quality_score"), hit.get("quality_grade"), hit.get("quality_reason"),
+                    hit.get("strong_bull_candle"), hit.get("is_sideways_base"),
+                    run_origin, run_id,
+                )
+                if inserted_id is not None:
+                    created_count += 1
+                    await _settle_historical_alert(conn, inserted_id, hit, bar_time)
+                else:
+                    skipped_count += 1
+
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE replay_runs
+                SET status='done', finished_at=NOW(),
+                    created_count=$2, skipped_count=$3
+                WHERE id=$1
+                """,
+                run_id, created_count, skipped_count,
+            )
+
+    result = {
+        "run_id": str(run_id),
+        "hits_found": len(hits),
+        "created_count": created_count,
+        "skipped_count": skipped_count,
+        "applied": apply,
+        "mode": mode,
+        "notify_mode": notify_mode,
+        "approximation_notice": (
+            "Bar-close approximation only — not an exact replay of live M1 "
+            "tick detection. Use for research/audit/recovery, not live alerts."
+        ),
+    }
+
+    if apply and notify_mode == "digest" and hits:
+        await notification.send_m1_replay_digest(
+            run_id=str(run_id), days=days, hits=hits,
+            created=created_count, mode=mode,
+        )
+
+    logger.info(
+        f"M1 replay_history: {len(hits)} hits, {created_count} created, "
+        f"{skipped_count} skipped (apply={apply}, mode={mode})"
+    )
+    return result
 
 
 # ── Live processing ────────────────────────────────────────────────────────

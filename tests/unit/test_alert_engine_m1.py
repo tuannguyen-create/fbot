@@ -535,3 +535,204 @@ class TestCalcMacd:
         closes = list(reversed([25000 + i * 10 for i in range(50)]))
         hist, rising = alert_engine_m1._calc_macd(closes)
         assert hist is not None
+
+
+# ── TestReplayM1History ────────────────────────────────────────────────────
+
+class TestReplayM1History:
+    """Tests for replay_m1_history() — historical provenance path."""
+
+    @pytest.mark.asyncio
+    async def test_dry_run_returns_hits_without_inserting(self, mock_pool):
+        """apply=False → scan runs but no INSERT, no replay_runs entry."""
+        pool, conn = mock_pool
+        alert_engine_m1.inject_deps(pool, MagicMock(), None)
+
+        fake_hits = [
+            {
+                "ticker": "HPG",
+                "bar_time": "2026-03-10T02:15:00+00:00",
+                "slot": 15,
+                "volume": 3_000_000,
+                "ratio": 3.0,
+                "avg_5d_hist": 1_000_000,
+                "in_magic": False,
+                "threshold": 2.0,
+                "bu_pct": 60.0,
+            }
+        ]
+
+        with patch("app.services.alert_engine_m1.scan_m1_history", new=AsyncMock(return_value=fake_hits)):
+            result = await alert_engine_m1.replay_m1_history(days=25, apply=False)
+
+        assert result["hits_found"] == 1
+        assert result["created_count"] == 0
+        assert result["applied"] is False
+        conn.execute.assert_not_called()  # no INSERT, no UPDATE replay_runs
+
+    @pytest.mark.asyncio
+    async def test_apply_inserts_with_historical_origin(self, mock_pool):
+        """apply=True → INSERT with origin='historical_replay', then _settle called."""
+        pool, conn = mock_pool
+        alert_engine_m1.inject_deps(pool, MagicMock(), None)
+
+        fake_hits = [
+            {
+                "ticker": "VCB",
+                "bar_time": "2026-03-10T02:30:00+00:00",
+                "slot": 30,
+                "volume": 2_500_000,
+                "ratio": 2.5,
+                "avg_5d_hist": 1_000_000,
+                "in_magic": False,
+                "threshold": 2.0,
+                "bu_pct": 55.0,
+            }
+        ]
+        # fetchval(INSERT RETURNING id) → 42; fetchval(INSERT replay_runs) handled via execute
+        conn.fetchval = AsyncMock(return_value=42)   # inserted_id
+        conn.execute = AsyncMock()
+        # _settle_historical_alert calls conn.fetch for intraday_1m bars
+        conn.fetch = AsyncMock(return_value=[
+            {"volume": 1_200_000},
+            {"volume": 1_100_000},
+        ])
+
+        with patch("app.services.alert_engine_m1.scan_m1_history", new=AsyncMock(return_value=fake_hits)), \
+             patch("app.services.alert_engine_m1.notification") as mock_notif:
+            mock_notif.send_m1_replay_digest = AsyncMock()
+            result = await alert_engine_m1.replay_m1_history(days=25, apply=True)
+
+        assert result["created_count"] == 1
+        assert result["skipped_count"] == 0
+        # Verify INSERT was called with historical_replay origin
+        insert_calls = [str(c) for c in conn.fetchval.call_args_list]
+        assert any("historical_replay" in c for c in insert_calls)
+        # Verify _settle called conn.fetch for intraday window
+        conn.fetch.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_idempotent_skips_existing_alerts(self, mock_pool):
+        """ON CONFLICT → fetchval returns None → skipped_count increments."""
+        pool, conn = mock_pool
+        alert_engine_m1.inject_deps(pool, MagicMock(), None)
+
+        fake_hits = [
+            {
+                "ticker": "HPG",
+                "bar_time": "2026-03-10T02:15:00+00:00",
+                "slot": 15,
+                "volume": 3_000_000,
+                "ratio": 3.0,
+                "avg_5d_hist": 1_000_000,
+                "in_magic": False,
+                "threshold": 2.0,
+                "bu_pct": None,
+            }
+        ]
+        conn.fetchval = AsyncMock(return_value=None)  # conflict → no INSERT
+        conn.execute = AsyncMock()
+
+        with patch("app.services.alert_engine_m1.scan_m1_history", new=AsyncMock(return_value=fake_hits)):
+            result = await alert_engine_m1.replay_m1_history(days=25, apply=True)
+
+        assert result["created_count"] == 0
+        assert result["skipped_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_settled_status_confirmed_when_15m_vol_high(self, mock_pool):
+        """_settle_historical_alert: high 15m vol → status='confirmed'."""
+        pool, conn = mock_pool
+        alert_engine_m1.inject_deps(pool, MagicMock(), None)
+
+        from datetime import datetime, timezone
+        bar_time = datetime(2026, 3, 10, 2, 15, 0, tzinfo=timezone.utc)
+        hit = {"ticker": "HPG", "avg_5d_hist": 1_000_000}
+
+        # 15 bars × 1.5M each → ratio_15m = 22.5M / (1M * 15) = 1.5 >= 1.3 → confirmed
+        conn.fetch = AsyncMock(return_value=[{"volume": 1_500_000}] * 15)
+        conn.execute = AsyncMock()
+
+        await alert_engine_m1._settle_historical_alert(conn, alert_id=99, hit=hit, bar_time=bar_time)
+
+        conn.execute.assert_called_once()
+        update_call = str(conn.execute.call_args_list[0])
+        assert "confirmed" in update_call
+
+    @pytest.mark.asyncio
+    async def test_settled_status_cancelled_when_15m_vol_low(self, mock_pool):
+        """_settle_historical_alert: low 15m vol → status='cancelled'."""
+        pool, conn = mock_pool
+        alert_engine_m1.inject_deps(pool, MagicMock(), None)
+
+        from datetime import datetime, timezone
+        bar_time = datetime(2026, 3, 10, 2, 15, 0, tzinfo=timezone.utc)
+        hit = {"ticker": "HPG", "avg_5d_hist": 1_000_000}
+
+        # 15 bars × 500K each → ratio_15m = 7.5M / (1M * 15) = 0.5 < 1.3 → cancelled
+        conn.fetch = AsyncMock(return_value=[{"volume": 500_000}] * 15)
+        conn.execute = AsyncMock()
+
+        await alert_engine_m1._settle_historical_alert(conn, alert_id=99, hit=hit, bar_time=bar_time)
+
+        conn.execute.assert_called_once()
+        update_call = str(conn.execute.call_args_list[0])
+        assert "cancelled" in update_call
+
+    @pytest.mark.asyncio
+    async def test_settle_no_op_when_no_bars(self, mock_pool):
+        """_settle_historical_alert: empty intraday_1m window → no UPDATE."""
+        pool, conn = mock_pool
+        alert_engine_m1.inject_deps(pool, MagicMock(), None)
+
+        from datetime import datetime, timezone
+        bar_time = datetime(2026, 3, 10, 2, 15, 0, tzinfo=timezone.utc)
+        hit = {"ticker": "HPG", "avg_5d_hist": 1_000_000}
+
+        conn.fetch = AsyncMock(return_value=[])
+        conn.execute = AsyncMock()
+
+        await alert_engine_m1._settle_historical_alert(conn, alert_id=99, hit=hit, bar_time=bar_time)
+
+        conn.execute.assert_not_called()
+
+
+# ── TestTodaySummaryOriginFilter ────────────────────────────────────────────
+
+class TestTodaySummaryOriginFilter:
+    """today_summary must only count origin='live' alerts, never replays.
+
+    These are static contract tests — FastAPI is not available in unit test env,
+    so we inspect the source directly to verify the SQL guard is present.
+    """
+
+    def test_today_summary_sql_includes_origin_live(self):
+        """app/api/alerts.py today_summary must hard-code origin='live' in the filter."""
+        import pathlib
+        src = pathlib.Path("app/api/alerts.py").read_text()
+        # The today_ict string must include an origin guard so historical replays
+        # are never counted in daily KPIs.
+        assert "origin = 'live'" in src, (
+            "today_summary is missing AND origin = 'live' guard — "
+            "historical replays would inflate today's KPI numbers"
+        )
+
+    def test_today_summary_sql_guard_is_inside_function(self):
+        """The origin guard must be inside the today_summary function body."""
+        import pathlib, ast, textwrap
+
+        src = pathlib.Path("app/api/alerts.py").read_text()
+        tree = ast.parse(src)
+
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                if node.name == "today_summary":
+                    func_src = textwrap.dedent(
+                        "\n".join(src.splitlines()[node.lineno - 1 : node.end_lineno])
+                    )
+                    assert "origin = 'live'" in func_src, (
+                        "origin='live' guard found in file but NOT inside today_summary"
+                    )
+                    return
+
+        raise AssertionError("today_summary function not found in app/api/alerts.py")
