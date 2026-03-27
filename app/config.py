@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     # FiinQuantX
     FIINQUANT_USERNAME: str = ""
     FIINQUANT_PASSWORD: str = ""
+    FIINQUANT_TICKER_LIMIT: int = 33  # max tickers per API call/stream (plan-dependent)
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://fbot:fbot_password@localhost:5432/fbot"

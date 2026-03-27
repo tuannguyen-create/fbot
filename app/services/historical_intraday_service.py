@@ -22,6 +22,8 @@ _pool = None
 _ICT = ZoneInfo("Asia/Ho_Chi_Minh")
 _FETCH_BATCH_SIZE = 100
 _UPSERT_BATCH_SIZE = 5000
+# FiinQuantX 1m data: max 31 calendar days per request; use 30 for safety margin
+_MAX_FIIN_1M_CALENDAR_DAYS = 30
 
 
 def inject_deps(pool):
@@ -212,33 +214,53 @@ async def backfill_intraday(days: int = 25):
     Seeds intraday_1m so volume_baselines reflect real market history rather
     than only the days the app has been running. Rebuilds baselines when done.
 
-    days=25 fetches via calendar-day window of ~days+10 to account for
-    weekends/holidays, giving at least 25 trading days of 1m bars.
+    days=25 requires ~35 calendar days (weekends+holidays). FiinQuantX limits
+    1m data to 31 calendar days per request, so we chunk into ≤30-day pieces.
+    Ticker batches are capped to FIINQUANT_TICKER_LIMIT to respect the plan.
     """
     to_date = date.today() - timedelta(days=1)        # up to yesterday
     from_date = to_date - timedelta(days=days + 10)   # calendar buffer
+
+    # Build date chunks of ≤ _MAX_FIIN_1M_CALENDAR_DAYS each
+    date_chunks: list[tuple[date, date]] = []
+    chunk_end = to_date
+    while chunk_end > from_date:
+        chunk_start = max(from_date, chunk_end - timedelta(days=_MAX_FIIN_1M_CALENDAR_DAYS))
+        date_chunks.append((chunk_start, chunk_end))
+        chunk_end = chunk_start - timedelta(days=1)
 
     tickers = await universe_service.get_active_tickers(force_refresh=True)
     if not tickers:
         logger.warning("Skipping 1m intraday backfill: active universe is empty")
         return
 
+    ticker_limit = settings.FIINQUANT_TICKER_LIMIT
+    batch_size = min(_FETCH_BATCH_SIZE, ticker_limit)
+    if len(tickers) > ticker_limit:
+        logger.warning(
+            f"Active universe ({len(tickers)}) exceeds FiinQuantX ticker limit "
+            f"({ticker_limit}) — backfilling first {ticker_limit} tickers only"
+        )
+        tickers = tickers[:ticker_limit]
+
     logger.info(
         f"Starting 1m intraday backfill: {from_date} → {to_date} "
-        f"for {len(tickers)} active tickers"
+        f"({len(date_chunks)} date chunk(s)) for {len(tickers)} tickers"
     )
     loop = asyncio.get_running_loop()
     total_count = 0
-    for i in range(0, len(tickers), _FETCH_BATCH_SIZE):
-        batch = tickers[i:i + _FETCH_BATCH_SIZE]
-        bars = await loop.run_in_executor(
-            None, lambda batch=batch: _fetch_1m_blocking(batch, from_date, to_date)
-        )
-        total_count += await _upsert_intraday(bars)
-        logger.info(
-            f"Intraday backfill batch {i // _FETCH_BATCH_SIZE + 1}: "
-            f"{len(batch)} tickers, {len(bars)} bars"
-        )
+    for chunk_start, chunk_end_dt in date_chunks:
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i:i + batch_size]
+            bars = await loop.run_in_executor(
+                None,
+                lambda b=batch, s=chunk_start, e=chunk_end_dt: _fetch_1m_blocking(b, s, e),
+            )
+            total_count += await _upsert_intraday(bars)
+            logger.info(
+                f"Intraday backfill [{chunk_start}→{chunk_end_dt}] "
+                f"batch {i // batch_size + 1}: {len(batch)} tickers, {len(bars)} bars"
+            )
 
     if total_count > 0:
         await baseline_service.rebuild_all(force=True)

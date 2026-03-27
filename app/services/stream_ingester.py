@@ -85,12 +85,23 @@ def inject_deps(pool, redis, alert_queue: asyncio.Queue):
 
 
 async def _refresh_active_tickers():
-    """Refresh stream ticker universe from watchlist DB."""
+    """Refresh stream ticker universe from watchlist DB.
+
+    Caps the list to FIINQUANT_TICKER_LIMIT to avoid TickerLimitFailed from
+    the FiinQuantX API when the DB watchlist exceeds the account's plan.
+    """
     global _ACTIVE_TICKERS, _WATCHLIST_SET
     tickers = await universe_service.get_active_tickers(force_refresh=True)
     normalized = tuple(str(t).upper() for t in tickers if t)
     if not normalized:
         normalized = tuple(settings.WATCHLIST)
+    limit = settings.FIINQUANT_TICKER_LIMIT
+    if len(normalized) > limit:
+        logger.warning(
+            f"Active universe ({len(normalized)}) exceeds FiinQuantX ticker limit "
+            f"({limit}) — streaming first {limit} tickers only"
+        )
+        normalized = normalized[:limit]
     if normalized != _ACTIVE_TICKERS:
         logger.info(
             f"Active stream universe updated: {len(_ACTIVE_TICKERS)} → {len(normalized)} tickers"

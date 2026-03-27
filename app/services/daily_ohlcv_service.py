@@ -142,11 +142,20 @@ async def backfill_historical(days: int = 25):
         logger.warning("Skipping daily OHLCV backfill: active universe is empty")
         return
 
+    ticker_limit = settings.FIINQUANT_TICKER_LIMIT
+    if len(tickers) > ticker_limit:
+        logger.warning(
+            f"Active universe ({len(tickers)}) exceeds FiinQuantX ticker limit "
+            f"({ticker_limit}) — backfilling first {ticker_limit} tickers only"
+        )
+        tickers = tickers[:ticker_limit]
+
     logger.info(f"Starting daily OHLCV backfill (last {days} days) for {len(tickers)} active tickers")
     loop = asyncio.get_running_loop()
+    batch_size = min(_FETCH_BATCH_SIZE, ticker_limit)
     total_count = 0
-    for i in range(0, len(tickers), _FETCH_BATCH_SIZE):
-        batch = tickers[i:i + _FETCH_BATCH_SIZE]
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i:i + batch_size]
         bars = await loop.run_in_executor(
             None, lambda batch=batch: _fetch_historical_blocking(batch, days)
         )
