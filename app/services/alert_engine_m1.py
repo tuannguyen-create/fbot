@@ -177,6 +177,9 @@ async def scan_m1_history(days: int = 25) -> list[dict]:
                     "quality_score": q_score,
                     "quality_grade": q_grade,
                     "quality_reason": features["quality_reason"],
+                    "strong_bull_candle": features["strong_bull_candle"],
+                    "is_sideways_base": features["is_sideways_base"],
+                    "features": features,
                 })
 
     results.sort(key=lambda x: x["bar_time"])
@@ -217,13 +220,16 @@ async def _settle_historical_alert(
     expected_15m = avg_5d * elapsed_slots if avg_5d else 1
     ratio_15m = cumulative / expected_15m if expected_15m > 0 else 0
     status = "confirmed" if ratio_15m >= settings.THRESHOLD_CONFIRM_15M else "cancelled"
+    # confirmed_at = end of the historical 15-min window (bar_time + 15min),
+    # NOT NOW() — so the UI shows the actual market time of confirmation,
+    # not the time the replay job ran.
     await conn.execute(
         """
         UPDATE volume_alerts
-        SET status=$1, confirmed_at=NOW(), ratio_15m=$2
-        WHERE id=$3
+        SET status=$1, confirmed_at=$2, ratio_15m=$3
+        WHERE id=$4
         """,
-        status, round(ratio_15m, 4), alert_id,
+        status, window_end, round(ratio_15m, 4), alert_id,
     )
 
 
@@ -278,12 +284,14 @@ async def replay_m1_history(
                     INSERT INTO volume_alerts
                         (ticker, slot, bar_time, volume, baseline_5d, ratio_5d, bu_pct,
                          foreign_net, in_magic_window, status,
-                         quality_score, quality_grade, quality_reason,
+                         features, quality_score, quality_grade, quality_reason,
+                         strong_bull_candle, is_sideways_base,
                          origin, replay_run_id, replayed_at, is_actionable)
                     VALUES ($1, $2, $3, $4, $5, $6, $7,
                             $8, $9, 'fired',
-                            $10, $11, $12,
-                            $13, $14, NOW(), FALSE)
+                            $10::jsonb, $11, $12, $13,
+                            $14, $15,
+                            $16, $17, NOW(), FALSE)
                     ON CONFLICT (ticker, slot,
                         (DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')))
                     DO NOTHING
@@ -293,7 +301,9 @@ async def replay_m1_history(
                     hit["volume"], hit.get("avg_5d_hist"), hit["ratio"], hit.get("bu_pct"),
                     hit.get("foreign_net"),
                     hit.get("in_magic", False),
+                    json.dumps(hit["features"]) if hit.get("features") else None,
                     hit.get("quality_score"), hit.get("quality_grade"), hit.get("quality_reason"),
+                    hit.get("strong_bull_candle"), hit.get("is_sideways_base"),
                     run_origin, run_id,
                 )
                 if inserted_id is not None:

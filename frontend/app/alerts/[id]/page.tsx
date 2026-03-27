@@ -89,7 +89,10 @@ export default function AlertDetailPage({ params }: Props) {
             <p className="font-semibold">
               {alert.ratio_15m ? formatRatio(alert.ratio_15m) : 'Chờ...'}
               {alert.confirmed_at && (
-                <span className="ml-1 text-xs text-gray-400">({formatDateTimeICT(alert.confirmed_at)})</span>
+                <span className="ml-1 text-xs text-gray-400">
+                  ({alert.origin === 'live' ? '' : 'phiên GD '}
+                  {formatDateTimeICT(alert.confirmed_at)})
+                </span>
               )}
             </p>
           </div>
