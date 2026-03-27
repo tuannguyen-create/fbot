@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { alertsApi } from '@/lib/api'
 import { AlertStatusBadge } from '@/components/AlertStatusBadge'
 import { QualityBadge } from '@/components/QualityBadge'
+import { OriginBadge } from '@/components/OriginBadge'
 import { formatAlertTime, formatDateTimeICT, formatVolume, formatRatio, formatPct, slotToTimeStr } from '@/lib/formatters'
 import Link from 'next/link'
 
@@ -48,7 +49,10 @@ export default function AlertDetailPage({ params }: Props) {
               Ghi nhận: {formatDateTimeICT(alert.fired_at)}
             </p>
           </div>
-          <AlertStatusBadge status={alert.status} />
+          <div className="flex items-center gap-2">
+            <OriginBadge origin={alert.origin} />
+            <AlertStatusBadge status={alert.status} />
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3 text-sm">
@@ -152,6 +156,28 @@ export default function AlertDetailPage({ params }: Props) {
             </p>
           )}
         </div>
+
+        {alert.origin !== 'live' && (
+          <div className="mt-3 pt-3 border-t border-gray-100 space-y-1">
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <span>Nguồn:</span>
+              <OriginBadge origin={alert.origin} />
+              {!alert.is_actionable && (
+                <span className="text-xs text-gray-400">(chỉ lưu trữ, không action)</span>
+              )}
+            </div>
+            {alert.replayed_at && (
+              <p className="text-xs text-gray-400">
+                Thêm lại lúc: {formatDateTimeICT(alert.replayed_at)}
+              </p>
+            )}
+            {alert.replay_run_id && (
+              <p className="text-xs text-gray-400 font-mono truncate">
+                Run: {alert.replay_run_id}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

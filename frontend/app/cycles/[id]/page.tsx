@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { cyclesApi } from '@/lib/api'
 import { CycleProgressBar } from '@/components/CycleProgressBar'
 import { PhaseBadge } from '@/components/PhaseBadge'
-import { formatDateICT, formatVolume } from '@/lib/formatters'
+import { OriginBadge } from '@/components/OriginBadge'
+import { formatDateICT, formatVolume, formatDateTimeICT } from '@/lib/formatters'
 import Link from 'next/link'
 
 interface Props {
@@ -42,6 +43,7 @@ export default function CycleDetailPage({ params }: Props) {
           </div>
           <div className="flex items-center gap-2">
             <PhaseBadge phase={cycle.phase} />
+            <OriginBadge origin={cycle.origin} />
             {cycle.game_type && (
               <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
                 {cycle.game_type}
@@ -107,6 +109,18 @@ export default function CycleDetailPage({ params }: Props) {
           <p>Email đột phá: {cycle.breakout_email_sent ? '✅ Đã gửi' : '⏳ Chờ'}</p>
           <p>Cảnh báo 10 ngày: {cycle.alert_sent_10d ? '✅ Đã gửi' : '⏳ Chờ'}</p>
           <p>Tín hiệu tạo đáy: {cycle.alert_sent_bottom ? '✅ Đã gửi' : '⏳ Chờ'}</p>
+          {cycle.origin !== 'live' && (
+            <div className="mt-2 pt-2 border-t border-gray-100">
+              <p className="text-xs text-gray-400">
+                Nguồn: <OriginBadge origin={cycle.origin} className="ml-1" />
+              </p>
+              {cycle.replayed_at && (
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Thêm lại: {formatDateTimeICT(cycle.replayed_at)}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

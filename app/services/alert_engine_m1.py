@@ -158,6 +158,11 @@ async def scan_m1_history(days: int = 25) -> list[dict]:
             avg_5d = sum(prev_vols[-5:]) / min(len(prev_vols), 5)
             result = evaluate_bar(bar, avg_5d)
             if result:
+                # Compute quality features from preceding bars (newest-first)
+                recent = list(reversed(bars[:i]))[:50]
+                features = compute_m1_features(bar, recent)
+                q_score = features["quality_score"]
+                q_grade = "A" if q_score >= 70 else "B" if q_score >= 40 else "C"
                 results.append({
                     "ticker": ticker,
                     "bar_time": bar["bar_time"].isoformat(),
@@ -168,6 +173,10 @@ async def scan_m1_history(days: int = 25) -> list[dict]:
                     "in_magic": result["in_magic"],
                     "threshold": result["threshold"],
                     "bu_pct": round(result["bu_pct"], 1) if result["bu_pct"] is not None else None,
+                    "foreign_net": bar.get("fn"),
+                    "quality_score": q_score,
+                    "quality_grade": q_grade,
+                    "quality_reason": features["quality_reason"],
                 })
 
     results.sort(key=lambda x: x["bar_time"])
@@ -267,19 +276,24 @@ async def replay_m1_history(
                 inserted_id = await conn.fetchval(
                     """
                     INSERT INTO volume_alerts
-                        (ticker, slot, bar_time, volume, ratio_5d, bu_pct,
-                         in_magic_window, status,
+                        (ticker, slot, bar_time, volume, baseline_5d, ratio_5d, bu_pct,
+                         foreign_net, in_magic_window, status,
+                         quality_score, quality_grade, quality_reason,
                          origin, replay_run_id, replayed_at, is_actionable)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'fired',
-                            $8, $9, NOW(), FALSE)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7,
+                            $8, $9, 'fired',
+                            $10, $11, $12,
+                            $13, $14, NOW(), FALSE)
                     ON CONFLICT (ticker, slot,
                         (DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')))
                     DO NOTHING
                     RETURNING id
                     """,
                     hit["ticker"], hit["slot"], bar_time,
-                    hit["volume"], hit["ratio"], hit.get("bu_pct"),
+                    hit["volume"], hit.get("avg_5d_hist"), hit["ratio"], hit.get("bu_pct"),
+                    hit.get("foreign_net"),
                     hit.get("in_magic", False),
+                    hit.get("quality_score"), hit.get("quality_grade"), hit.get("quality_reason"),
                     run_origin, run_id,
                 )
                 if inserted_id is not None:
