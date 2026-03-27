@@ -159,35 +159,119 @@ async def scan_m1_history(
     }
 
 
+# ── M1 historical replay ───────────────────────────────────────────────────
+
+@router.post("/replay-m1-history")
+async def replay_m1_history(
+    days: int = Query(default=25, ge=1, le=60),
+    apply: bool = Query(default=False),
+    mode: str = Query(default="bootstrap", pattern="^(bootstrap|recovery|manual)$"),
+    notify_mode: str = Query(default="none", pattern="^(none|digest)$"),
+    _: None = Depends(_require_admin_key),
+):
+    """Replay historical M1 alerts: detect + optionally persist + optionally digest.
+
+    apply=false (default): dry-run, returns hits — no DB writes.
+    apply=true: inserts volume_alerts with origin='historical_replay', is_actionable=FALSE.
+
+    Idempotent: existing alert at same ticker+slot+ICT-date is skipped.
+
+    APPROXIMATION NOTICE: bar-close volume only, not intra-minute tick detection.
+    Use as research/audit/recovery layer.
+    """
+    from app.services import alert_engine_m1
+    result = await alert_engine_m1.replay_m1_history(
+        days=days, apply=apply, mode=mode, notify_mode=notify_mode,
+    )
+    return {"success": True, "data": result}
+
+
 # ── M3 historical replay ───────────────────────────────────────────────────
 
 @router.post("/replay-m3-history")
 async def replay_m3_history(
     days: int = Query(default=25, ge=1, le=60),
     apply: bool = Query(default=False),
+    mode: str = Query(default="bootstrap", pattern="^(bootstrap|recovery|manual)$"),
+    notify_mode: str = Query(default="none", pattern="^(none|digest)$"),
     _: None = Depends(_require_admin_key),
 ):
     """Replay M3 breakout detection over historical daily_ohlcv.
 
     apply=false (default): dry-run, returns candidates — no DB writes.
-    apply=true: creates cycle_events for new breakouts (no email/SSE).
+    apply=true: creates cycle_events with origin='historical_replay' (no per-cycle email/SSE).
 
     Idempotent: existing (ticker, breakout_date) cycles are never re-created.
     """
     from app.services import alert_engine_m3
-    results = await alert_engine_m3.replay_history(days=days, apply=apply)
+    result = await alert_engine_m3.replay_history(
+        days=days, apply=apply, mode=mode, notify_mode=notify_mode,
+    )
+    candidates = result["candidates"]
     return {
         "success": True,
         "data": {
-            "candidates": results,
-            "total": len(results),
-            "new_found": sum(1 for r in results if r["is_new"]),
-            "created": sum(1 for r in results if r.get("created")),
+            "candidates": candidates,
+            "total": len(candidates),
+            "new_found": sum(1 for r in candidates if r["is_new"]),
+            "created": result["created_count"],
+            "run_id": result["run_id"],
             "days_scanned": days,
             "applied": apply,
+            "mode": mode,
+            "notify_mode": notify_mode,
             "thresholds": {
                 "vol_mult": settings.BREAKOUT_VOL_MULT,
                 "price_pct": settings.BREAKOUT_PRICE_PCT,
             },
         },
     }
+
+
+# ── Replay runs audit ──────────────────────────────────────────────────────
+
+@router.get("/replay-runs")
+async def list_replay_runs(
+    module: Optional[str] = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    pool: asyncpg.Pool = Depends(get_db),
+    _: None = Depends(_require_admin_key),
+):
+    """List past replay/backfill runs for audit."""
+    where = "WHERE module = $1" if module else ""
+    params = [module] if module else []
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT id, module, mode, date_from, date_to, apply, notify_mode,
+                   created_count, skipped_count, status, started_at, finished_at, error
+            FROM replay_runs
+            {where}
+            ORDER BY started_at DESC
+            LIMIT {limit}
+            """,
+            *params,
+        )
+    return {"success": True, "data": {"runs": [dict(r) for r in rows]}}
+
+
+@router.get("/replay-runs/{run_id}")
+async def get_replay_run(
+    run_id: str,
+    pool: asyncpg.Pool = Depends(get_db),
+    _: None = Depends(_require_admin_key),
+):
+    """Get details of a specific replay run by UUID."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, module, mode, date_from, date_to, apply, notify_mode,
+                   created_count, skipped_count, status, started_at, finished_at, error
+            FROM replay_runs WHERE id = $1::uuid
+            """,
+            run_id,
+        )
+    if not row:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Replay run {run_id} not found")
+    return {"success": True, "data": {"run": dict(row)}}

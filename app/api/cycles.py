@@ -45,7 +45,8 @@ async def list_cycles(
                    game_type, rewatch_window_start, rewatch_window_end,
                    phase_reason, invalidation_reason,
                    breakout_zone_low, breakout_zone_high,
-                   source_alert_id, source_alert_inferred
+                   source_alert_id, source_alert_inferred,
+                   origin
             FROM cycle_events {where}
             ORDER BY created_at DESC
             LIMIT ${idx} OFFSET ${idx+1}

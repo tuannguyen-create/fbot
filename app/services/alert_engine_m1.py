@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -175,6 +176,113 @@ async def scan_m1_history(days: int = 25) -> list[dict]:
         f"(bar-close approx, rolling baseline)"
     )
     return results
+
+
+async def replay_m1_history(
+    days: int = 25,
+    apply: bool = False,
+    mode: str = "bootstrap",
+    notify_mode: str = "none",
+) -> dict:
+    """Persist historical M1 hits with origin='historical_replay'.
+
+    Calls scan_m1_history() for rolling-baseline detection, then optionally
+    inserts each hit into volume_alerts with:
+      - origin = 'historical_replay' (or 'recovery_replay' if mode='recovery')
+      - is_actionable = FALSE
+      - No SSE push, no per-item Telegram/email
+
+    Idempotent: existing alert at same ticker+slot+ICT-date is skipped.
+
+    APPROXIMATION NOTICE: bar-close volume only, not mid-minute tick detection.
+    Use as research/audit/recovery layer — not as a source of live alerts.
+    """
+    from datetime import date, timedelta
+
+    run_origin = "recovery_replay" if mode == "recovery" else "historical_replay"
+    run_id = uuid.uuid4()
+    date_from = date.today() - timedelta(days=days + 10)
+    date_to   = date.today() - timedelta(days=1)
+
+    if apply:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO replay_runs
+                    (id, module, mode, date_from, date_to, apply,
+                     notify_mode, status, started_at)
+                VALUES ($1, 'm1', $2, $3, $4, TRUE, $5, 'running', NOW())
+                """,
+                run_id, mode, date_from, date_to, notify_mode,
+            )
+
+    hits = await scan_m1_history(days=days)
+    created_count = 0
+    skipped_count = 0
+
+    if apply and hits:
+        async with _pool.acquire() as conn:
+            for hit in hits:
+                bar_time = datetime.fromisoformat(hit["bar_time"])
+                inserted_id = await conn.fetchval(
+                    """
+                    INSERT INTO volume_alerts
+                        (ticker, slot, bar_time, volume, ratio_5d, bu_pct,
+                         in_magic_window, status,
+                         origin, replay_run_id, replayed_at, is_actionable)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'fired',
+                            $8, $9, NOW(), FALSE)
+                    ON CONFLICT (ticker, slot,
+                        (DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')))
+                    DO NOTHING
+                    RETURNING id
+                    """,
+                    hit["ticker"], hit["slot"], bar_time,
+                    hit["volume"], hit["ratio"], hit.get("bu_pct"),
+                    hit.get("in_magic", False),
+                    run_origin, run_id,
+                )
+                if inserted_id is not None:
+                    created_count += 1
+                else:
+                    skipped_count += 1
+
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE replay_runs
+                SET status='done', finished_at=NOW(),
+                    created_count=$2, skipped_count=$3
+                WHERE id=$1
+                """,
+                run_id, created_count, skipped_count,
+            )
+
+    result = {
+        "run_id": str(run_id),
+        "hits_found": len(hits),
+        "created_count": created_count,
+        "skipped_count": skipped_count,
+        "applied": apply,
+        "mode": mode,
+        "notify_mode": notify_mode,
+        "approximation_notice": (
+            "Bar-close approximation only — not an exact replay of live M1 "
+            "tick detection. Use for research/audit/recovery, not live alerts."
+        ),
+    }
+
+    if apply and notify_mode == "digest" and hits:
+        await notification.send_m1_replay_digest(
+            run_id=str(run_id), days=days, hits=hits,
+            created=created_count, mode=mode,
+        )
+
+    logger.info(
+        f"M1 replay_history: {len(hits)} hits, {created_count} created, "
+        f"{skipped_count} skipped (apply={apply}, mode={mode})"
+    )
+    return result
 
 
 # ── Live processing ────────────────────────────────────────────────────────

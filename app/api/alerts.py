@@ -22,6 +22,7 @@ async def list_alerts(
     date_to: Optional[str] = None,
     status: Optional[str] = None,
     magic_only: bool = False,
+    origin: Optional[str] = None,
     limit: int = Query(default=50, le=200),
     offset: int = 0,
     pool: asyncpg.Pool = Depends(get_db),
@@ -48,6 +49,10 @@ async def list_alerts(
         idx += 1
     if magic_only:
         conditions.append("in_magic_window = TRUE")
+    if origin:
+        conditions.append(f"origin = ${idx}")
+        params.append(origin)
+        idx += 1
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -56,7 +61,7 @@ async def list_alerts(
         rows = await conn.fetch(
             f"""
             SELECT id, ticker, fired_at, bar_time, slot, volume, ratio_5d, bu_pct,
-                   in_magic_window, status, quality_grade
+                   in_magic_window, status, quality_grade, origin, is_actionable
             FROM volume_alerts {where}
             ORDER BY bar_time DESC
             LIMIT ${idx} OFFSET ${idx+1}
@@ -72,7 +77,11 @@ async def list_alerts(
 
 @router.get("/summary/today")
 async def today_summary(pool: asyncpg.Pool = Depends(get_db)):
-    today_ict = "DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') = CURRENT_DATE AT TIME ZONE 'Asia/Ho_Chi_Minh'"
+    # Only count live alerts for today's KPIs — historical replays must not inflate numbers
+    today_ict = (
+        "DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') = CURRENT_DATE AT TIME ZONE 'Asia/Ho_Chi_Minh'"
+        " AND origin = 'live'"
+    )
     async with pool.acquire() as conn:
         total = await conn.fetchval(f"SELECT COUNT(*) FROM volume_alerts WHERE {today_ict}")
         confirmed = await conn.fetchval(f"SELECT COUNT(*) FROM volume_alerts WHERE {today_ict} AND status='confirmed'")
@@ -104,7 +113,8 @@ async def get_alert(alert_id: int, pool: asyncpg.Pool = Depends(get_db)):
                    in_magic_window, status, baseline_5d, foreign_net,
                    confirmed_at, ratio_15m, email_sent, cycle_event_id,
                    features, quality_score, quality_grade, quality_reason,
-                   strong_bull_candle, is_sideways_base
+                   strong_bull_candle, is_sideways_base,
+                   origin, replay_run_id, replayed_at, is_actionable
             FROM volume_alerts WHERE id=$1
             """,
             alert_id,

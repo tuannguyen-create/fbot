@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { alertsApi } from '@/lib/api'
 import { AlertStatusBadge } from '@/components/AlertStatusBadge'
 import { QualityBadge } from '@/components/QualityBadge'
+import { OriginBadge } from '@/components/OriginBadge'
 import { formatDateTimeICT, formatVolume, formatRatio, formatPct, slotToTimeStr } from '@/lib/formatters'
 import Link from 'next/link'
 
@@ -25,11 +26,19 @@ function AlertsContent() {
   const ticker = params.get('ticker') ?? ''
   const status = params.get('status') ?? ''
   const magicOnly = params.get('magic_only') === 'true'
+  const origin = (params.get('origin') ?? '') as 'live' | 'historical_replay' | 'recovery_replay' | ''
   const offset = Number(params.get('offset') ?? 0)
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['alerts', 'list', { ticker, status, magicOnly, offset }],
-    queryFn: () => alertsApi.list({ ticker: ticker || undefined, status: status || undefined, magic_only: magicOnly, limit: LIMIT, offset }),
+    queryKey: ['alerts', 'list', { ticker, status, magicOnly, origin, offset }],
+    queryFn: () => alertsApi.list({
+      ticker: ticker || undefined,
+      status: status || undefined,
+      magic_only: magicOnly,
+      origin: origin || undefined,
+      limit: LIMIT,
+      offset,
+    }),
   })
 
   const alerts = data?.alerts ?? []
@@ -76,6 +85,16 @@ function AlertsContent() {
           />
           Chỉ cửa sổ vàng
         </label>
+        <select
+          value={origin}
+          onChange={(e) => updateFilter('origin', e.target.value)}
+          className="border border-gray-300 rounded px-2 py-1 text-sm"
+        >
+          <option value="">Tất cả nguồn</option>
+          <option value="live">Live</option>
+          <option value="historical_replay">Lịch sử</option>
+          <option value="recovery_replay">Phục hồi</option>
+        </select>
         <span className="text-xs text-gray-400 ml-auto">
           {total} kết quả
         </span>
@@ -115,6 +134,7 @@ function AlertsContent() {
                         {a.ticker}
                         {a.in_magic_window && <span className="ml-1 text-yellow-500" title="Cửa sổ vàng">⚡</span>}
                       </Link>
+                      <OriginBadge origin={a.origin} className="ml-1.5" />
                     </td>
                     <td className="px-4 py-2 text-gray-500">{formatDateTimeICT(a.fired_at)}</td>
                     <td className="px-4 py-2 text-right font-mono">{formatVolume(a.volume)}</td>

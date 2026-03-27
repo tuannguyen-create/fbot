@@ -398,3 +398,66 @@ async def send_cycle_bottom_email(cycle_id: int):
         _send_email(subject, html, cycle_id=cycle_id),
         _send_telegram(tg_text),
     )
+
+
+# ── Replay digest notifications ────────────────────────────────────────────
+
+async def send_m1_replay_digest(
+    run_id: str,
+    days: int,
+    hits: list,
+    created: int,
+    mode: str,
+) -> None:
+    """Telegram summary digest for M1 historical replay — never per-item."""
+    if not hits:
+        return
+
+    mode_map = {"bootstrap": "BOOTSTRAP", "recovery": "KHÔI PHỤC", "manual": "THỦ CÔNG"}
+    label = mode_map.get(mode, mode.upper())
+
+    tickers = sorted({h["ticker"] for h in hits})
+    lines = []
+    for t in tickers[:5]:
+        n = sum(1 for h in hits if h["ticker"] == t)
+        lines.append(f"  • {t}: {n} hit")
+    if len(tickers) > 5:
+        lines.append(f"  … +{len(tickers) - 5} mã khác")
+
+    text = (
+        f"<b>📊 M1 {label} {days} ngày</b>\n"
+        f"Tạo mới: {created} alert | Tổng hits: {len(hits)}\n"
+        + "\n".join(lines)
+        + f"\n<i>Run: {run_id[:8]}</i>"
+    )
+    await _send_telegram(text)
+
+
+async def send_m3_replay_digest(
+    run_id: str,
+    days: int,
+    candidates: list,
+    created: int,
+    mode: str,
+) -> None:
+    """Telegram summary digest for M3 historical replay — never per-cycle."""
+    mode_map = {"bootstrap": "BOOTSTRAP", "recovery": "KHÔI PHỤC", "manual": "THỦ CÔNG"}
+    label = mode_map.get(mode, mode.upper())
+
+    new_cycles = [c for c in candidates if c.get("created")]
+    lines = []
+    for c in new_cycles[:5]:
+        lines.append(
+            f"  • {c['ticker']} {c['breakout_date']} "
+            f"({c['vol_ratio']}x, +{c['price_change_pct']}%)"
+        )
+    if len(new_cycles) > 5:
+        lines.append(f"  … +{len(new_cycles) - 5} cycle khác")
+
+    text = (
+        f"<b>📈 M3 {label} {days} ngày</b>\n"
+        f"Tạo mới: {created} cycle | Tổng candidates: {len(candidates)}\n"
+        + ("\n".join(lines) if lines else "  (không có cycle mới)")
+        + f"\n<i>Run: {run_id[:8]}</i>"
+    )
+    await _send_telegram(text)

@@ -25,6 +25,7 @@ export interface CycleSummary {
   source_alert_id: number | null
   /** FALSE = canonical (M1→M3 intraday path); TRUE = heuristic backfill from migration */
   source_alert_inferred: boolean
+  origin: 'live' | 'historical_replay' | 'recovery_replay'
 }
 
 export interface CycleDetail extends CycleSummary {
