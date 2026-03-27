@@ -224,7 +224,7 @@ app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 @app.get("/api/v1/health")
 async def health():
     from app import database, redis_client
-    from app.services import stream_ingester
+    from app.services import stream_ingester, universe_service
 
     db_status = "ok"
     redis_status = "ok"
@@ -246,6 +246,7 @@ async def health():
         redis_status = "error"
 
     stream_detail = stream_ingester.get_detailed_status()
+    active_tickers = await universe_service.get_active_tickers()
 
     return {
         "success": True,
@@ -255,6 +256,9 @@ async def health():
             "stream": stream_detail["status"],
             "stream_reason": stream_detail["reason"],
             "last_bar_time": stream_detail["last_bar_time"],
+            "active_ticker_count": len(active_tickers),
+            "effective_ticker_count": min(len(active_tickers), settings.FIINQUANT_TICKER_LIMIT),
+            "fiinquant_ticker_limit": settings.FIINQUANT_TICKER_LIMIT,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         },
     }

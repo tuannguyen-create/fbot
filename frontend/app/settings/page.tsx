@@ -120,7 +120,11 @@ export default function SettingsPage() {
 
       {/* Info */}
       <div className="bg-gray-50 rounded-lg border border-gray-200 p-4 text-sm text-gray-500">
-        <p>Theo dõi: <b>{settings?.watchlist_count ?? 33}</b> mã (VN30 + NVL/PDR/KBC)</p>
+        <p>Theo dõi: <b>{settings?.active_ticker_count ?? 33}</b> mã active
+          {settings && settings.active_ticker_count > settings.fiinquant_ticker_limit && (
+            <span className="text-orange-500 ml-1">(scan thực tế: {settings.effective_ticker_count}/{settings.fiinquant_ticker_limit} mã do giới hạn FiinQuantX)</span>
+          )}
+        </p>
         <p className="mt-1">Luồng: <b>{settings?.stream_status === 'connected' ? 'Kết nối' : 'Mất kết nối'}</b></p>
       </div>
     </div>

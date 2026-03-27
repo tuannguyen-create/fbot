@@ -22,8 +22,10 @@ _pool = None
 _ICT = ZoneInfo("Asia/Ho_Chi_Minh")
 _FETCH_BATCH_SIZE = 100
 _UPSERT_BATCH_SIZE = 5000
-# FiinQuantX 1m data: max 31 calendar days per request; use 30 for safety margin
-_MAX_FIIN_1M_CALENDAR_DAYS = 30
+# FiinQuantX 1m data: max 31 calendar days per request.
+# from_date & to_date are inclusive, so (to - from).days must be ≤ 30.
+# Use 29 so each chunk spans exactly 30 inclusive days at most.
+_MAX_FIIN_1M_CALENDAR_DAYS = 29
 
 
 def inject_deps(pool):

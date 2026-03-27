@@ -22,7 +22,9 @@ export interface AppSettings {
   breakout_vol_mult: number
   breakout_price_pct: number
   alert_days_before_cycle: number
-  watchlist_count: number
+  active_ticker_count: number
+  effective_ticker_count: number
+  fiinquant_ticker_limit: number
   stream_status: 'connected' | 'disconnected'
 }
 

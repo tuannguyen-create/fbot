@@ -46,7 +46,7 @@ async def get_active_tickers(force_refresh: bool = False) -> list[str]:
                 SELECT ticker
                 FROM watchlist
                 WHERE active = TRUE
-                ORDER BY ticker
+                ORDER BY in_vn30 DESC, ticker
                 """
             )
         tickers = tuple(str(r["ticker"]).upper() for r in rows if r["ticker"])

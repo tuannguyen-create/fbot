@@ -27,7 +27,9 @@ class AppSettings(BaseModel):
     breakout_vol_mult: float
     breakout_price_pct: float
     alert_days_before_cycle: int
-    watchlist_count: int
+    active_ticker_count: int
+    effective_ticker_count: int
+    fiinquant_ticker_limit: int
     stream_status: str
 
 
