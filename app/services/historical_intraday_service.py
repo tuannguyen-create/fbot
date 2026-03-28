@@ -216,15 +216,17 @@ async def _upsert_intraday(bars: list[dict]) -> int:
 # ── Public API ─────────────────────────────────────────────────────────────
 
 async def check_needs_backfill() -> bool:
-    """Return True if fewer than half the watchlist tickers have ≥5 days of 1m data.
+    """Return True if fewer than half the effective tickers have ≥5 days of 1m data.
 
-    Checks per-ticker coverage instead of global row count, so a situation
-    where a few tickers have dense data but most are empty still triggers a
-    backfill.
+    Uses effective scan universe (capped by FIINQUANT_TICKER_LIMIT) — not the
+    full active universe. Without this, 700 active tickers + 100 ticker limit
+    would always report "sparse" since 600 tickers can never have data.
     """
     tickers = await universe_service.get_active_tickers()
     if not tickers:
         return False
+    # Only check tickers that backfill_intraday() would actually fetch
+    effective = tickers[:settings.FIINQUANT_TICKER_LIMIT]
     async with _pool.acquire() as conn:
         covered = await conn.fetchval(
             """
@@ -239,9 +241,9 @@ async def check_needs_backfill() -> bool:
                 HAVING COUNT(DISTINCT DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')) >= 5
             ) t
             """,
-            tickers,
+            effective,
         )
-    threshold = max(len(tickers) // 2, 1)
+    threshold = max(len(effective) // 2, 1)
     return (covered or 0) < threshold
 
 
