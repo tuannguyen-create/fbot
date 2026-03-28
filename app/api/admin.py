@@ -277,3 +277,23 @@ async def get_replay_run(
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"Replay run {run_id} not found")
     return {"success": True, "data": {"run": dict(row)}}
+
+
+@router.post("/cleanup-stuck-runs")
+async def cleanup_stuck_runs(
+    pool: asyncpg.Pool = Depends(get_db),
+    _: None = Depends(_require_admin_key),
+):
+    """Mark stuck 'running' replay runs as 'failed' (no finished_at after 10 min)."""
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE replay_runs
+            SET status = 'failed', finished_at = NOW(),
+                error = 'Cleaned up: stuck in running state'
+            WHERE status = 'running'
+              AND started_at < NOW() - INTERVAL '10 minutes'
+            """
+        )
+    count = int(result.split()[-1]) if result else 0
+    return {"success": True, "data": {"cleaned_up": count}}

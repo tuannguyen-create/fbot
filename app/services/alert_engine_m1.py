@@ -275,42 +275,43 @@ async def replay_m1_history(
     created_count = 0
     skipped_count = 0
 
-    if apply and hits:
-        async with _pool.acquire() as conn:
-            for hit in hits:
-                bar_time = datetime.fromisoformat(hit["bar_time"])
-                inserted_id = await conn.fetchval(
-                    """
-                    INSERT INTO volume_alerts
-                        (ticker, slot, bar_time, volume, baseline_5d, ratio_5d, bu_pct,
-                         foreign_net, in_magic_window, status,
-                         features, quality_score, quality_grade, quality_reason,
-                         strong_bull_candle, is_sideways_base,
-                         origin, replay_run_id, replayed_at, is_actionable)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7,
-                            $8, $9, 'fired',
-                            $10::jsonb, $11, $12, $13,
-                            $14, $15,
-                            $16, $17, NOW(), FALSE)
-                    ON CONFLICT (ticker, slot,
-                        (DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')))
-                    DO NOTHING
-                    RETURNING id
-                    """,
-                    hit["ticker"], hit["slot"], bar_time,
-                    hit["volume"], hit.get("avg_5d_hist"), hit["ratio"], hit.get("bu_pct"),
-                    hit.get("foreign_net"),
-                    hit.get("in_magic", False),
-                    json.dumps(hit["features"]) if hit.get("features") else None,
-                    hit.get("quality_score"), hit.get("quality_grade"), hit.get("quality_reason"),
-                    hit.get("strong_bull_candle"), hit.get("is_sideways_base"),
-                    run_origin, run_id,
-                )
-                if inserted_id is not None:
-                    created_count += 1
-                    await _settle_historical_alert(conn, inserted_id, hit, bar_time)
-                else:
-                    skipped_count += 1
+    if apply:
+        if hits:
+            async with _pool.acquire() as conn:
+                for hit in hits:
+                    bar_time = datetime.fromisoformat(hit["bar_time"])
+                    inserted_id = await conn.fetchval(
+                        """
+                        INSERT INTO volume_alerts
+                            (ticker, slot, bar_time, volume, baseline_5d, ratio_5d, bu_pct,
+                             foreign_net, in_magic_window, status,
+                             features, quality_score, quality_grade, quality_reason,
+                             strong_bull_candle, is_sideways_base,
+                             origin, replay_run_id, replayed_at, is_actionable)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7,
+                                $8, $9, 'fired',
+                                $10::jsonb, $11, $12, $13,
+                                $14, $15,
+                                $16, $17, NOW(), FALSE)
+                        ON CONFLICT (ticker, slot,
+                            (DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')))
+                        DO NOTHING
+                        RETURNING id
+                        """,
+                        hit["ticker"], hit["slot"], bar_time,
+                        hit["volume"], hit.get("avg_5d_hist"), hit["ratio"], hit.get("bu_pct"),
+                        hit.get("foreign_net"),
+                        hit.get("in_magic", False),
+                        json.dumps(hit["features"]) if hit.get("features") else None,
+                        hit.get("quality_score"), hit.get("quality_grade"), hit.get("quality_reason"),
+                        hit.get("strong_bull_candle"), hit.get("is_sideways_base"),
+                        run_origin, run_id,
+                    )
+                    if inserted_id is not None:
+                        created_count += 1
+                        await _settle_historical_alert(conn, inserted_id, hit, bar_time)
+                    else:
+                        skipped_count += 1
 
         async with _pool.acquire() as conn:
             await conn.execute(
