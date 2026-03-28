@@ -376,6 +376,31 @@ async def sync_watchlist(
     }
 
 
+@router.post("/backfill-daily")
+async def admin_backfill_daily(
+    days: int = Query(default=25, ge=1, le=60),
+    _: None = Depends(_require_admin_key),
+):
+    """Manually trigger daily OHLCV backfill from FiinQuantX.
+
+    Required after expanding watchlist — new tickers have no daily_ohlcv data.
+    Capped to FIINQUANT_TICKER_LIMIT tickers (VN30 first).
+    """
+    from app.services import daily_ohlcv_service
+    await daily_ohlcv_service.backfill_historical(days=days)
+    active = await universe_service.get_active_tickers()
+    effective = min(len(active), settings.FIINQUANT_TICKER_LIMIT)
+    return {
+        "success": True,
+        "data": {
+            "days": days,
+            "ticker_limit": settings.FIINQUANT_TICKER_LIMIT,
+            "active_tickers": len(active),
+            "effective_tickers": effective,
+        },
+    }
+
+
 @router.post("/backfill-intraday")
 async def admin_backfill_intraday(
     days: Optional[int] = Query(default=None, ge=1, le=180),
