@@ -86,7 +86,7 @@ def _fetch_historical_blocking(tickers: list[str], days: int = 25) -> list[dict]
             realtime=False,
             tickers=tickers,
             fields=["open", "high", "low", "close", "volume", "bu", "sd", "fb", "fs", "fn"],
-            by="1D",
+            by="1d",
             period=days,
             callback=_on_bar,
         )
@@ -131,28 +131,26 @@ async def _persist_bars(bars: list[dict]) -> int:
     return len(rows)
 
 
-async def backfill_historical(days: int = 25):
+async def backfill_historical(days: int = 25) -> int:
     """
     Fetch and persist last N days of daily OHLCV from FiinQuantX.
     Called at startup to bootstrap M3 analysis.
-    Falls back silently if FiinQuantX API is unavailable.
+
+    Iterates through ALL active tickers in batches of FIINQUANT_TICKER_LIMIT
+    (the per-API-call limit). Returns total bars upserted.
     """
     tickers = await universe_service.get_active_tickers(force_refresh=True)
     if not tickers:
         logger.warning("Skipping daily OHLCV backfill: active universe is empty")
-        return
+        return 0
 
-    ticker_limit = settings.FIINQUANT_TICKER_LIMIT
-    if len(tickers) > ticker_limit:
-        logger.warning(
-            f"Active universe ({len(tickers)}) exceeds FiinQuantX ticker limit "
-            f"({ticker_limit}) — backfilling first {ticker_limit} tickers only"
-        )
-        tickers = tickers[:ticker_limit]
-
-    logger.info(f"Starting daily OHLCV backfill (last {days} days) for {len(tickers)} active tickers")
+    batch_size = min(_FETCH_BATCH_SIZE, settings.FIINQUANT_TICKER_LIMIT)
+    num_batches = (len(tickers) + batch_size - 1) // batch_size
+    logger.info(
+        f"Starting daily OHLCV backfill (last {days} days) for {len(tickers)} tickers "
+        f"in {num_batches} batch(es) of {batch_size}"
+    )
     loop = asyncio.get_running_loop()
-    batch_size = min(_FETCH_BATCH_SIZE, ticker_limit)
     total_count = 0
     for i in range(0, len(tickers), batch_size):
         batch = tickers[i:i + batch_size]
@@ -161,10 +159,11 @@ async def backfill_historical(days: int = 25):
         )
         total_count += await _persist_bars(bars)
         logger.info(
-            f"Daily OHLCV backfill batch {i // _FETCH_BATCH_SIZE + 1}: "
+            f"Daily OHLCV backfill batch {i // batch_size + 1}/{num_batches}: "
             f"{len(batch)} tickers, {len(bars)} rows"
         )
     logger.info(f"Daily OHLCV backfill complete: {total_count} rows upserted")
+    return total_count
 
 
 async def aggregate_today():

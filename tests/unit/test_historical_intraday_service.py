@@ -67,29 +67,37 @@ class TestParse1mBar:
 # ── check_needs_backfill ───────────────────────────────────────────────────
 
 class TestCheckNeedsBackfill:
-    # Now checks: COUNT(DISTINCT ticker) with ≥5 days coverage.
-    # Threshold = len(WATCHLIST) // 2 = 16 (33 tickers in config).
-    # Returns True (needs backfill) when covered tickers < threshold.
-
     @pytest.mark.asyncio
     async def test_needs_backfill_when_sparse(self, mock_pool):
         pool, conn = mock_pool
-        conn.fetchval = AsyncMock(return_value=3)   # only 3 tickers covered → < 16
-        result = await historical_intraday_service.check_needs_backfill()
+        conn.fetchval = AsyncMock(return_value=3)
+        with patch(
+            "app.services.historical_intraday_service.universe_service.get_active_tickers",
+            new=AsyncMock(return_value=[f"T{i:02d}" for i in range(20)]),
+        ):
+            result = await historical_intraday_service.check_needs_backfill()
         assert result is True
 
     @pytest.mark.asyncio
     async def test_no_backfill_when_enough_data(self, mock_pool):
         pool, conn = mock_pool
-        conn.fetchval = AsyncMock(return_value=20)  # 20 tickers covered → ≥ 16
-        result = await historical_intraday_service.check_needs_backfill()
+        conn.fetchval = AsyncMock(return_value=12)
+        with patch(
+            "app.services.historical_intraday_service.universe_service.get_active_tickers",
+            new=AsyncMock(return_value=[f"T{i:02d}" for i in range(20)]),
+        ):
+            result = await historical_intraday_service.check_needs_backfill()
         assert result is False
 
     @pytest.mark.asyncio
     async def test_needs_backfill_when_empty(self, mock_pool):
         pool, conn = mock_pool
         conn.fetchval = AsyncMock(return_value=0)
-        result = await historical_intraday_service.check_needs_backfill()
+        with patch(
+            "app.services.historical_intraday_service.universe_service.get_active_tickers",
+            new=AsyncMock(return_value=[f"T{i:02d}" for i in range(20)]),
+        ):
+            result = await historical_intraday_service.check_needs_backfill()
         assert result is True
 
 
@@ -153,3 +161,34 @@ class TestBackfillIntraday:
             await historical_intraday_service.backfill_intraday(days=5)
 
         mock_bs.rebuild_all.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_batches_through_all_active_tickers(self, mock_pool):
+        tickers = [f"T{i:03d}" for i in range(705)]
+        calls = []
+
+        def fake_fetch(batch, from_date, to_date):
+            calls.append((list(batch), from_date, to_date))
+            return [{"ticker": t, "bar_time": datetime(2026, 3, 27, 2, 15, tzinfo=timezone.utc)} for t in batch]
+
+        async def fake_run_in_executor(_self, _executor, fn):
+            return fn()
+
+        fake_loop = type("FakeLoop", (), {"run_in_executor": fake_run_in_executor})()
+
+        with patch(
+            "app.services.historical_intraday_service.universe_service.get_active_tickers",
+            new=AsyncMock(return_value=tickers),
+        ), patch.object(historical_intraday_service, "_fetch_1m_blocking", side_effect=fake_fetch), \
+             patch.object(historical_intraday_service, "_upsert_intraday", new=AsyncMock(side_effect=lambda bars: len(bars))), \
+             patch("app.services.historical_intraday_service.baseline_service") as mock_bs, \
+             patch("app.services.historical_intraday_service.asyncio.get_running_loop", return_value=fake_loop), \
+             patch.object(historical_intraday_service.settings, "FIINQUANT_TICKER_LIMIT", 731), \
+             patch.object(historical_intraday_service.settings, "FIINQUANT_INTRADAY_HISTORY_DAYS", 180):
+            mock_bs.rebuild_all = AsyncMock()
+            total = await historical_intraday_service.backfill_intraday(days=5)
+
+        assert total == 705
+        assert len(calls) == 8
+        assert [len(batch) for batch, _, _ in calls] == [100, 100, 100, 100, 100, 100, 100, 5]
+        mock_bs.rebuild_all.assert_awaited_once_with(force=True)

@@ -12,6 +12,7 @@ from app.services import stream_ingester
 @pytest.fixture(autouse=True)
 def reset_ingester_state():
     """Reset all module-level tick/session state between tests."""
+    default_active = tuple(stream_ingester.settings.WATCHLIST)
     with stream_ingester._tick_lock:
         stream_ingester._tick_bars.clear()
     stream_ingester._last_m1_check.clear()
@@ -19,6 +20,8 @@ def reset_ingester_state():
     stream_ingester._session_confirmed = False
     stream_ingester._stream_connected = False
     stream_ingester._last_bar_time = None
+    stream_ingester._ACTIVE_TICKERS = default_active
+    stream_ingester._WATCHLIST_SET = frozenset(default_active)
     yield
     with stream_ingester._tick_lock:
         stream_ingester._tick_bars.clear()
@@ -26,6 +29,8 @@ def reset_ingester_state():
     stream_ingester._shutting_down = False
     stream_ingester._session_confirmed = False
     stream_ingester._stream_connected = False
+    stream_ingester._ACTIVE_TICKERS = default_active
+    stream_ingester._WATCHLIST_SET = frozenset(default_active)
 
 
 def _tick(ticker="HPG", ts="2026-03-25T09:15:10", match_vol=1000,
@@ -180,6 +185,21 @@ class TestMinuteFlushTimer:
                     to_flush.append(ticker)
 
         assert len(to_flush) == 0  # current minute not flushed
+
+
+class TestRefreshActiveTickers:
+    @pytest.mark.asyncio
+    async def test_uses_full_universe_when_limit_covers_all(self):
+        tickers = [f"T{i:03d}" for i in range(705)]
+
+        with patch(
+            "app.services.stream_ingester.universe_service.get_active_tickers",
+            new=AsyncMock(return_value=tickers),
+        ), patch.object(stream_ingester.settings, "FIINQUANT_TICKER_LIMIT", 731):
+            await stream_ingester._refresh_active_tickers()
+
+        assert len(stream_ingester._ACTIVE_TICKERS) == 705
+        assert len(stream_ingester._WATCHLIST_SET) == 705
 
 
 # ── Disconnect flush ───────────────────────────────────────────────────────

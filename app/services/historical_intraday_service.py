@@ -216,17 +216,14 @@ async def _upsert_intraday(bars: list[dict]) -> int:
 # ── Public API ─────────────────────────────────────────────────────────────
 
 async def check_needs_backfill() -> bool:
-    """Return True if fewer than half the effective tickers have ≥5 days of 1m data.
+    """Return True if fewer than half the active tickers have ≥5 days of 1m data.
 
-    Uses effective scan universe (capped by FIINQUANT_TICKER_LIMIT) — not the
-    full active universe. Without this, 700 active tickers + 100 ticker limit
-    would always report "sparse" since 600 tickers can never have data.
+    Since backfill_intraday() now iterates through ALL active tickers in batches,
+    we check the full active universe.
     """
     tickers = await universe_service.get_active_tickers()
     if not tickers:
         return False
-    # Only check tickers that backfill_intraday() would actually fetch
-    effective = tickers[:settings.FIINQUANT_TICKER_LIMIT]
     async with _pool.acquire() as conn:
         covered = await conn.fetchval(
             """
@@ -241,9 +238,9 @@ async def check_needs_backfill() -> bool:
                 HAVING COUNT(DISTINCT DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')) >= 5
             ) t
             """,
-            effective,
+            tickers,
         )
-    threshold = max(len(effective) // 2, 1)
+    threshold = max(len(tickers) // 2, 1)
     return (covered or 0) < threshold
 
 
@@ -257,8 +254,8 @@ async def backfill_intraday(days: int | None = None) -> int:
     if chunked into smaller requests, because the provider rejects any from_date
     beyond the retention boundary.
 
-    Ticker batches are capped to FIINQUANT_TICKER_LIMIT to respect the plan.
-    Rebuilds baselines when done.
+    Iterates ALL active tickers in batches of FIINQUANT_TICKER_LIMIT
+    (the per-API-call limit). Rebuilds baselines when done.
     """
     retention_days = settings.FIINQUANT_INTRADAY_HISTORY_DAYS
     to_date = date.today() - timedelta(days=1)  # up to yesterday
@@ -295,18 +292,13 @@ async def backfill_intraday(days: int | None = None) -> int:
         logger.warning("Skipping 1m intraday backfill: active universe is empty")
         return 0
 
-    ticker_limit = settings.FIINQUANT_TICKER_LIMIT
-    batch_size = min(_FETCH_BATCH_SIZE, ticker_limit)
-    if len(tickers) > ticker_limit:
-        logger.warning(
-            f"Active universe ({len(tickers)}) exceeds FiinQuantX ticker limit "
-            f"({ticker_limit}) — backfilling first {ticker_limit} tickers only"
-        )
-        tickers = tickers[:ticker_limit]
+    batch_size = min(_FETCH_BATCH_SIZE, settings.FIINQUANT_TICKER_LIMIT)
+    num_batches = (len(tickers) + batch_size - 1) // batch_size
 
     logger.info(
         f"Starting 1m intraday backfill: {from_date} → {to_date} "
-        f"({len(date_chunks)} chunk(s)) for {len(tickers)} tickers"
+        f"({len(date_chunks)} date chunk(s)) for {len(tickers)} tickers "
+        f"in {num_batches} batch(es) of {batch_size}"
     )
     loop = asyncio.get_running_loop()
     total_count = 0
@@ -325,7 +317,8 @@ async def backfill_intraday(days: int | None = None) -> int:
     else:
         logger.warning(
             f"Intraday backfill: 0 bars fetched — current FiinQuantX plan may not "
-            f"support 1m historical data for {ticker_limit} tickers / "
+            f"support 1m historical data for {len(tickers)} tickers "
+            f"(batched by {batch_size}) / "
             f"{effective_cal_days} calendar days"
         )
     return total_count

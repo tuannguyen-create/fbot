@@ -384,19 +384,19 @@ async def admin_backfill_daily(
     """Manually trigger daily OHLCV backfill from FiinQuantX.
 
     Required after expanding watchlist — new tickers have no daily_ohlcv data.
-    Capped to FIINQUANT_TICKER_LIMIT tickers (VN30 first).
+    Iterates ALL active tickers in batches of FIINQUANT_TICKER_LIMIT.
     """
     from app.services import daily_ohlcv_service
-    await daily_ohlcv_service.backfill_historical(days=days)
+    total_bars = await daily_ohlcv_service.backfill_historical(days=days)
     active = await universe_service.get_active_tickers()
-    effective = min(len(active), settings.FIINQUANT_TICKER_LIMIT)
     return {
         "success": True,
         "data": {
             "days": days,
-            "ticker_limit": settings.FIINQUANT_TICKER_LIMIT,
-            "active_tickers": len(active),
-            "effective_tickers": effective,
+            "total_tickers": len(active),
+            "batch_size": settings.FIINQUANT_TICKER_LIMIT,
+            "num_batches": (len(active) + settings.FIINQUANT_TICKER_LIMIT - 1) // settings.FIINQUANT_TICKER_LIMIT,
+            "bars_upserted": total_bars,
         },
     }
 
