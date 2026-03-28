@@ -105,7 +105,11 @@ def _fetch_1m_blocking(
     from_date: date,
     to_date: date,
 ) -> list[dict]:
-    """Fetch historical 1m bars from FiinQuantX. Blocking — run in executor."""
+    """Fetch historical 1m bars from FiinQuantX. Blocking — run in executor.
+
+    Tries from_date/to_date first; if 0 bars returned, falls back to
+    period-based fetch (same approach that works for daily OHLCV).
+    """
     try:
         import FiinQuantX as fq
 
@@ -121,16 +125,45 @@ def _fetch_1m_blocking(
             if bar and bar["volume"] > 0:
                 collected.append(bar)
 
-        event = client.Fetch_Trading_Data(
-            realtime=False,
-            tickers=tickers,
-            fields=["open", "high", "low", "close", "volume", "bu", "sd", "fb", "fs", "fn"],
-            by="1m",
-            from_date=from_date.isoformat(),
-            to_date=to_date.isoformat(),
-            callback=_on_bar,
+        # Primary: date-range fetch
+        calendar_days = (to_date - from_date).days
+        logger.info(
+            f"Historical 1m fetch attempt: {len(tickers)} tickers, "
+            f"{from_date} → {to_date} ({calendar_days} cal days)"
         )
-        event.get_data()
+        try:
+            event = client.Fetch_Trading_Data(
+                realtime=False,
+                tickers=tickers,
+                fields=["open", "high", "low", "close", "volume", "bu", "sd", "fb", "fs", "fn"],
+                by="1m",
+                from_date=from_date.isoformat(),
+                to_date=to_date.isoformat(),
+                callback=_on_bar,
+            )
+            event.get_data()
+        except Exception as e:
+            logger.warning(f"Historical 1m date-range fetch failed: {e}")
+
+        # Fallback: period-based fetch (same style as daily OHLCV which works)
+        if not collected:
+            logger.info(
+                f"Historical 1m date-range returned 0 bars — "
+                f"trying period={calendar_days} fallback"
+            )
+            try:
+                event2 = client.Fetch_Trading_Data(
+                    realtime=False,
+                    tickers=tickers,
+                    fields=["open", "high", "low", "close", "volume", "bu", "sd", "fb", "fs", "fn"],
+                    by="1m",
+                    period=calendar_days,
+                    callback=_on_bar,
+                )
+                event2.get_data()
+            except Exception as e:
+                logger.warning(f"Historical 1m period-based fallback also failed: {e}")
+
         logger.info(
             f"Historical 1m fetch: {len(collected)} bars "
             f"for {len(tickers)} tickers ({from_date} → {to_date})"
