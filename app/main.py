@@ -57,19 +57,42 @@ async def _seed_watchlist(pool):
 
 
 async def _maybe_bootstrap_historical_replays(pool):
-    """Seed historical M3 cycles from daily_ohlcv when no replay rows exist yet.
+    """Seed historical M1/M3 into UI tables once when no replay rows exist yet.
 
-    M1 bootstrap is skipped: FiinQuantX historical API only provides 1D data,
-    so intraday_1m is empty until the live tick stream populates it.
-    M1 historical replay is available via POST /admin/replay-m1-history
-    once enough live 1m data has accumulated (~5 trading days).
+    M3 uses daily_ohlcv (1D historical) — works on all FiinQuantX plans.
+    M1 uses intraday_1m — plan-dependent. If the current plan's intraday
+    history window yields 0 bars, M1 bootstrap is skipped gracefully.
+    M1 historical replay is also available via POST /admin/replay-m1-history.
     """
-    from app.services import alert_engine_m3
+    from app.services import alert_engine_m1, alert_engine_m3
+    from app.services import historical_intraday_service
 
     async with pool.acquire() as conn:
+        m1_hist_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM volume_alerts WHERE origin <> 'live'"
+        )
         m3_hist_count = await conn.fetchval(
             "SELECT COUNT(*) FROM cycle_events WHERE origin <> 'live'"
         )
+
+    # M1: try intraday backfill within plan-aware window, then replay if data exists
+    if (m1_hist_count or 0) == 0:
+        if await historical_intraday_service.check_needs_backfill():
+            logger.info("intraday_1m sparse — attempting plan-aware 1m historical backfill")
+            bars_fetched = await historical_intraday_service.backfill_intraday()
+            if bars_fetched > 0:
+                logger.info("M1 bootstrap: intraday data available — replaying M1 history")
+                await alert_engine_m1.replay_m1_history(
+                    days=25,
+                    apply=True,
+                    mode="bootstrap",
+                    notify_mode="digest",
+                )
+            else:
+                logger.info(
+                    "M1 bootstrap skipped: intraday history unavailable for current "
+                    "FiinQuantX plan. M1 alerts will populate from live tick stream."
+                )
 
     if (m3_hist_count or 0) == 0:
         logger.info("No historical M3 cycles found — bootstrapping 25-day M3 replay")
@@ -140,13 +163,14 @@ async def lifespan(app: FastAPI):
     broadcaster_task = asyncio.create_task(broadcaster())
     stream_task = asyncio.create_task(stream_ingester.start())
 
-    # Backfill daily OHLCV — wait until stream connects (up to 60 s)
-    # to avoid racing FiinQuantX session cleanup at boot.
+    # Backfill daily OHLCV + bootstrap historical replays.
+    # Wait until stream connects (up to 60 s) to avoid racing FiinQuantX
+    # session cleanup at boot.
     #
-    # NOTE: FiinQuantX historical API only supports 1D timeframe (no 1m).
-    # intraday_1m is populated exclusively from the live tick stream.
-    # M1 baselines will be sparse for the first ~5 trading days after
-    # a fresh deploy, then stabilize as live data accumulates.
+    # M3 bootstrap: always works (uses daily 1D historical).
+    # M1 bootstrap: plan-dependent — if FiinQuantX plan allows intraday
+    # history, backfill_intraday() seeds data and M1 replay runs.
+    # Otherwise M1 populates from live tick stream over ~5 trading days.
     async def _delayed_backfill():
         for _ in range(60):
             if stream_ingester.get_status() == "connected":

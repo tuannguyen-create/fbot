@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     FIINQUANT_USERNAME: str = ""
     FIINQUANT_PASSWORD: str = ""
     FIINQUANT_TICKER_LIMIT: int = 33  # max tickers per API call/stream (plan-dependent)
+    FIINQUANT_INTRADAY_HISTORY_DAYS: int = 30  # provider intraday retention window in calendar days (plan-dependent)
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://fbot:fbot_password@localhost:5432/fbot"

@@ -5,8 +5,10 @@ Flow:
   2. _upsert_intraday()     — bulk upsert into intraday_1m (ON CONFLICT DO UPDATE)
   3. baseline_service.rebuild_all(force=True) — recompute baselines from fresh data
 
-Triggered at startup when intraday_1m has < 5 trading days of data, so M1 baselines
-are accurate from day 1 instead of degrading for the first week.
+FiinQuantX SDK supports historical 1m data, but availability depends on the
+subscription plan (ticker count, history depth). The app degrades gracefully:
+if the current plan cannot fulfil the request, 0 bars are returned and M1
+bootstrap is skipped with a clear log message.
 """
 import asyncio
 import logging
@@ -243,20 +245,42 @@ async def check_needs_backfill() -> bool:
     return (covered or 0) < threshold
 
 
-async def backfill_intraday(days: int = 25):
-    """Fetch and persist last N trading days of 1m OHLCV from FiinQuantX.
+async def backfill_intraday(days: int | None = None) -> int:
+    """Fetch and persist recent 1m OHLCV from FiinQuantX within plan retention window.
 
-    Seeds intraday_1m so volume_baselines reflect real market history rather
-    than only the days the app has been running. Rebuilds baselines when done.
+    Returns the total number of bars upserted (0 if plan doesn't allow 1m history).
 
-    days=25 requires ~35 calendar days (weekends+holidays). FiinQuantX limits
-    1m data to 31 calendar days per request, so we chunk into ≤30-day pieces.
+    The effective window is clamped to FIINQUANT_INTRADAY_HISTORY_DAYS calendar
+    days — the provider's retention limit. Requesting older data would fail even
+    if chunked into smaller requests, because the provider rejects any from_date
+    beyond the retention boundary.
+
     Ticker batches are capped to FIINQUANT_TICKER_LIMIT to respect the plan.
+    Rebuilds baselines when done.
     """
-    to_date = date.today() - timedelta(days=1)        # up to yesterday
-    from_date = to_date - timedelta(days=days + 10)   # calendar buffer
+    retention_days = settings.FIINQUANT_INTRADAY_HISTORY_DAYS
+    to_date = date.today() - timedelta(days=1)  # up to yesterday
+    # Clamp to provider retention: oldest_allowed is inclusive
+    oldest_allowed = to_date - timedelta(days=retention_days - 1)
+
+    if days is not None:
+        requested_from = to_date - timedelta(days=days + 10)  # calendar buffer
+        from_date = max(requested_from, oldest_allowed)
+    else:
+        from_date = oldest_allowed
+
+    effective_cal_days = (to_date - from_date).days
+    # Estimate trading sessions (~5 trading days per 7 calendar days)
+    est_trading_sessions = effective_cal_days * 5 // 7
+
+    logger.info(
+        f"M1 intraday backfill plan: provider retention={retention_days} cal days, "
+        f"effective window={from_date} → {to_date} ({effective_cal_days} cal days, "
+        f"~{est_trading_sessions} trading sessions)"
+    )
 
     # Build date chunks of ≤ _MAX_FIIN_1M_CALENDAR_DAYS each
+    # All chunks are within retention window, so none will be rejected
     date_chunks: list[tuple[date, date]] = []
     chunk_end = to_date
     while chunk_end > from_date:
@@ -267,7 +291,7 @@ async def backfill_intraday(days: int = 25):
     tickers = await universe_service.get_active_tickers(force_refresh=True)
     if not tickers:
         logger.warning("Skipping 1m intraday backfill: active universe is empty")
-        return
+        return 0
 
     ticker_limit = settings.FIINQUANT_TICKER_LIMIT
     batch_size = min(_FETCH_BATCH_SIZE, ticker_limit)
@@ -280,7 +304,7 @@ async def backfill_intraday(days: int = 25):
 
     logger.info(
         f"Starting 1m intraday backfill: {from_date} → {to_date} "
-        f"({len(date_chunks)} date chunk(s)) for {len(tickers)} tickers"
+        f"({len(date_chunks)} chunk(s)) for {len(tickers)} tickers"
     )
     loop = asyncio.get_running_loop()
     total_count = 0
@@ -292,13 +316,14 @@ async def backfill_intraday(days: int = 25):
                 lambda b=batch, s=chunk_start, e=chunk_end_dt: _fetch_1m_blocking(b, s, e),
             )
             total_count += await _upsert_intraday(bars)
-            logger.info(
-                f"Intraday backfill [{chunk_start}→{chunk_end_dt}] "
-                f"batch {i // batch_size + 1}: {len(batch)} tickers, {len(bars)} bars"
-            )
 
     if total_count > 0:
         await baseline_service.rebuild_all(force=True)
         logger.info(f"Intraday backfill complete: {total_count} bars, baselines rebuilt")
     else:
-        logger.warning("Intraday backfill: 0 bars fetched — FiinQuantX may be unavailable")
+        logger.warning(
+            f"Intraday backfill: 0 bars fetched — current FiinQuantX plan may not "
+            f"support 1m historical data for {ticker_limit} tickers / "
+            f"{effective_cal_days} calendar days"
+        )
+    return total_count
