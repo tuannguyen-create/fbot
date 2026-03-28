@@ -57,24 +57,18 @@ async def _seed_watchlist(pool):
 
 
 async def _maybe_bootstrap_historical_replays(pool):
-    """Seed historical M1/M3 into UI tables once when no replay rows exist yet."""
-    from app.services import alert_engine_m1, alert_engine_m3
+    """Seed historical M3 cycles from daily_ohlcv when no replay rows exist yet.
+
+    M1 bootstrap is skipped: FiinQuantX historical API only provides 1D data,
+    so intraday_1m is empty until the live tick stream populates it.
+    M1 historical replay is available via POST /admin/replay-m1-history
+    once enough live 1m data has accumulated (~5 trading days).
+    """
+    from app.services import alert_engine_m3
 
     async with pool.acquire() as conn:
-        m1_hist_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM volume_alerts WHERE origin <> 'live'"
-        )
         m3_hist_count = await conn.fetchval(
             "SELECT COUNT(*) FROM cycle_events WHERE origin <> 'live'"
-        )
-
-    if (m1_hist_count or 0) == 0:
-        logger.info("No historical M1 alerts found — bootstrapping 25-day M1 replay")
-        await alert_engine_m1.replay_m1_history(
-            days=25,
-            apply=True,
-            mode="bootstrap",
-            notify_mode="digest",
         )
 
     if (m3_hist_count or 0) == 0:
@@ -146,18 +140,19 @@ async def lifespan(app: FastAPI):
     broadcaster_task = asyncio.create_task(broadcaster())
     stream_task = asyncio.create_task(stream_ingester.start())
 
-    # Backfill daily OHLCV + intraday 1m — wait until stream connects (up to 60 s)
+    # Backfill daily OHLCV — wait until stream connects (up to 60 s)
     # to avoid racing FiinQuantX session cleanup at boot.
+    #
+    # NOTE: FiinQuantX historical API only supports 1D timeframe (no 1m).
+    # intraday_1m is populated exclusively from the live tick stream.
+    # M1 baselines will be sparse for the first ~5 trading days after
+    # a fresh deploy, then stabilize as live data accumulates.
     async def _delayed_backfill():
         for _ in range(60):
             if stream_ingester.get_status() == "connected":
                 break
             await asyncio.sleep(1)
         await daily_ohlcv_service.backfill_historical()
-        # Seed intraday_1m for M1 baseline accuracy when data is sparse (<5 days)
-        if await historical_intraday_service.check_needs_backfill():
-            logger.info("intraday_1m sparse — running 1m historical backfill")
-            await historical_intraday_service.backfill_intraday()
         await _maybe_bootstrap_historical_replays(pool)
     backfill_task = asyncio.create_task(_delayed_backfill())
 
