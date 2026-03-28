@@ -7,6 +7,7 @@ from typing import Optional
 
 import asyncpg
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import BaseModel
 
 from app.config import settings
 from app.database import get_db
@@ -297,3 +298,101 @@ async def cleanup_stuck_runs(
         )
     count = int(result.split()[-1]) if result else 0
     return {"success": True, "data": {"cleaned_up": count}}
+
+
+# ── Watchlist management ──────────────────────────────────────────────────
+
+class SyncWatchlistRequest(BaseModel):
+    tickers: list[str]
+    vn30: list[str] = []
+    exchange: str = "HOSE"
+    deactivate_unlisted: bool = False
+
+
+@router.post("/sync-watchlist")
+async def sync_watchlist(
+    body: SyncWatchlistRequest,
+    pool: asyncpg.Pool = Depends(get_db),
+    _: None = Depends(_require_admin_key),
+):
+    """Bulk upsert tickers into watchlist.
+
+    - New tickers: inserted with active=TRUE, eligible_for_m3=TRUE
+    - Existing tickers: activated, in_vn30 updated; company_name/sector/game_type preserved
+    - deactivate_unlisted=true: deactivates tickers NOT in the provided list
+    """
+    tickers = sorted({t.upper().strip() for t in body.tickers if t.strip()})
+    if not tickers:
+        raise HTTPException(status_code=400, detail="tickers list is empty")
+
+    vn30_set = {t.upper().strip() for t in body.vn30}
+
+    async with pool.acquire() as conn:
+        rows = [
+            (t, body.exchange, t in vn30_set, True, True)
+            for t in tickers
+        ]
+        await conn.executemany(
+            """
+            INSERT INTO watchlist (ticker, exchange, in_vn30, active, eligible_for_m3)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (ticker) DO UPDATE SET
+                in_vn30 = EXCLUDED.in_vn30,
+                active = TRUE,
+                eligible_for_m3 = TRUE
+            """,
+            rows,
+        )
+
+        deactivated = 0
+        if body.deactivate_unlisted:
+            result = await conn.execute(
+                "UPDATE watchlist SET active = FALSE "
+                "WHERE NOT (ticker = ANY($1::text[])) AND active = TRUE",
+                tickers,
+            )
+            deactivated = int(result.split()[-1]) if result else 0
+
+        total_active = await conn.fetchval(
+            "SELECT COUNT(*) FROM watchlist WHERE active = TRUE"
+        )
+        total_vn30 = await conn.fetchval(
+            "SELECT COUNT(*) FROM watchlist WHERE in_vn30 = TRUE AND active = TRUE"
+        )
+
+    logger.info(
+        f"Watchlist sync: {len(tickers)} upserted, {deactivated} deactivated, "
+        f"{total_active} total active, {total_vn30} VN30"
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "upserted": len(tickers),
+            "deactivated": deactivated,
+            "total_active": total_active,
+            "total_vn30": total_vn30,
+        },
+    }
+
+
+@router.post("/backfill-intraday")
+async def admin_backfill_intraday(
+    days: Optional[int] = Query(default=None, ge=1, le=180),
+    _: None = Depends(_require_admin_key),
+):
+    """Manually trigger intraday 1m backfill within plan retention window.
+
+    days=null: use FIINQUANT_INTRADAY_HISTORY_DAYS (plan-aware default).
+    Returns number of bars fetched and upserted.
+    """
+    from app.services import historical_intraday_service
+    total = await historical_intraday_service.backfill_intraday(days=days)
+    return {
+        "success": True,
+        "data": {
+            "bars_upserted": total,
+            "retention_days": settings.FIINQUANT_INTRADAY_HISTORY_DAYS,
+            "ticker_limit": settings.FIINQUANT_TICKER_LIMIT,
+        },
+    }
