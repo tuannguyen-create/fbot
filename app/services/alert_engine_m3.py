@@ -356,9 +356,9 @@ async def _create_cycle(
                  origin, replay_run_id, replayed_at, is_actionable)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                     $9, $10, $11, $12, $13, $14, $15, FALSE,
-                    $16, $17,
-                    CASE WHEN $16 <> 'live' THEN NOW() ELSE NULL END,
-                    TRUE)
+                    $16::varchar, $17,
+                    CASE WHEN $16::text <> 'live' THEN NOW() ELSE NULL END,
+                    CASE WHEN $16::text = 'live' THEN TRUE ELSE FALSE END)
             RETURNING id
             """,
             ticker,
