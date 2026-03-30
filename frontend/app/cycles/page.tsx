@@ -5,7 +5,7 @@ import { cyclesApi } from '@/lib/api'
 import { CycleProgressBar } from '@/components/CycleProgressBar'
 import { PhaseBadge } from '@/components/PhaseBadge'
 import { OriginBadge } from '@/components/OriginBadge'
-import { formatDateICT } from '@/lib/formatters'
+import { formatDateICT, formatRatio, formatVolume } from '@/lib/formatters'
 import Link from 'next/link'
 
 export default function CyclesPage() {
@@ -18,6 +18,12 @@ export default function CyclesPage() {
   })
 
   const cycles = data?.cycles ?? []
+  const { data: candidatesData, isLoading: candidatesLoading } = useQuery({
+    queryKey: ['cycles', 'candidates'],
+    queryFn: () => cyclesApi.candidates({ days: 25, limit: 50 }),
+    refetchInterval: 5 * 60_000,
+  })
+  const candidates = candidatesData?.candidates ?? []
 
   return (
     <div className="space-y-4 max-w-3xl mx-auto">
@@ -92,6 +98,60 @@ export default function CyclesPage() {
           ))}
         </div>
       )}
+
+      <div className="pt-2">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-800">Breakout M3 gần đây</h2>
+            <p className="text-xs text-gray-400">
+              Scan daily 25 ngày, hiện có dữ liệu cho {candidatesData?.tickers_with_data ?? '—'} mã
+            </p>
+          </div>
+          <span className="text-xs text-gray-400">{candidatesData?.total ?? 0} candidates</span>
+        </div>
+
+        {candidatesLoading ? (
+          <div className="text-center py-8 text-gray-400">Đang tải breakout gần đây...</div>
+        ) : candidates.length === 0 ? (
+          <div className="text-center py-8 text-gray-400 border border-dashed border-gray-200 rounded-lg">
+            Chưa có breakout M3 nào để hiển thị
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {candidates.map((c) => (
+              <div key={`${c.ticker}-${c.breakout_date}`} className="bg-white rounded-lg border border-gray-200 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-lg font-bold text-gray-900">{c.ticker}</span>
+                    {c.game_type && (
+                      <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                        {c.game_type}
+                      </span>
+                    )}
+                    {c.cycle_id ? (
+                      <Link href={`/cycles/${c.cycle_id}`} className="text-xs text-orange-600 hover:underline">
+                        Đã tạo cycle →
+                      </Link>
+                    ) : (
+                      <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded">Candidate</span>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-semibold text-orange-600">{formatRatio(c.vol_ratio)}</div>
+                    <div className="text-xs text-gray-400">{formatDateICT(c.breakout_date)}</div>
+                  </div>
+                </div>
+                <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-gray-500">
+                  <div>KL: <b>{formatVolume(c.volume)}</b></div>
+                  <div>Tăng giá: <b>{c.price_change_pct.toFixed(2)}%</b></div>
+                  <div>MA20 vol: <b>{formatVolume(c.ma20_used)}</b></div>
+                  <div>Giá đóng: <b>{c.close.toLocaleString()}</b></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

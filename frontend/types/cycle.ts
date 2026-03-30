@@ -38,3 +38,16 @@ export interface CycleDetail extends CycleSummary {
   created_at: string
   updated_at: string
 }
+
+export interface CycleCandidate {
+  ticker: string
+  breakout_date: string
+  vol_ratio: number
+  price_change_pct: number
+  volume: number
+  close: number
+  ma20_used: number
+  cycle_id: number | null
+  cycle_phase: Phase | null
+  game_type: string | null
+}

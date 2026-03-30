@@ -1,5 +1,5 @@
 import type { AlertDetail, AlertListParams, AlertSummary, AlertTodaySummary } from '@/types/alert'
-import type { CycleDetail, CycleSummary } from '@/types/cycle'
+import type { CycleCandidate, CycleDetail, CycleSummary } from '@/types/cycle'
 import type { AppSettings, HealthStatus, WatchlistItem } from '@/types/api'
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
@@ -50,6 +50,10 @@ export const cyclesApi = {
   list: (params?: { phase?: string; ticker?: string; limit?: number; offset?: number }) =>
     apiFetch<{ cycles: CycleSummary[]; total: number }>(
       `/api/v1/cycles${buildQuery(params as Record<string, unknown>)}`
+    ),
+  candidates: (params?: { days?: number; limit?: number }) =>
+    apiFetch<{ candidates: CycleCandidate[]; total: number; tickers_with_data: number; days_scanned: number }>(
+      `/api/v1/cycles/candidates${buildQuery(params as Record<string, unknown>)}`
     ),
   get: (id: number) => apiFetch<{ cycle: CycleDetail }>(`/api/v1/cycles/${id}`),
 }

@@ -5,9 +5,29 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 import asyncpg
 
 from app.database import get_db
+from app.services import alert_engine_m3
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@router.get("/candidates")
+async def list_cycle_candidates(
+    days: int = Query(default=25, ge=1, le=60),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    result = await alert_engine_m3.scan_history(days=days)
+    candidates = result["breakout_candidates"][:limit]
+    return {
+        "success": True,
+        "data": {
+            "candidates": candidates,
+            "total": result["total"],
+            "tickers_with_data": result["tickers_with_data"],
+            "days_scanned": result["days_scanned"],
+            "thresholds": result["thresholds"],
+        },
+    }
 
 
 @router.get("")

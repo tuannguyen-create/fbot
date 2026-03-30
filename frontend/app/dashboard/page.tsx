@@ -6,7 +6,7 @@ import { LiveAlertFeed } from '@/components/LiveAlertFeed'
 import { VolumeHeatmap } from '@/components/VolumeHeatmap'
 import { CycleProgressBar } from '@/components/CycleProgressBar'
 import { PhaseBadge } from '@/components/PhaseBadge'
-import { formatDateICT } from '@/lib/formatters'
+import { formatDateICT, formatRatio } from '@/lib/formatters'
 import Link from 'next/link'
 
 export default function DashboardPage() {
@@ -22,6 +22,12 @@ export default function DashboardPage() {
     refetchInterval: 60_000,
   })
 
+  const { data: candidatesData } = useQuery({
+    queryKey: ['cycles', 'candidates', 'dashboard'],
+    queryFn: () => cyclesApi.candidates({ days: 25, limit: 5 }),
+    refetchInterval: 5 * 60_000,
+  })
+
   const { data: health } = useQuery({
     queryKey: ['health'],
     queryFn: () => healthApi.check(),
@@ -30,6 +36,7 @@ export default function DashboardPage() {
 
   const today = new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Ho_Chi_Minh' })
   const cycles = cyclesData?.cycles ?? []
+  const candidates = candidatesData?.candidates ?? []
 
   return (
     <div className="space-y-4 max-w-4xl mx-auto">
@@ -159,6 +166,39 @@ export default function DashboardPage() {
                     {c.source_alert_inferred ? 'Alert liên quan' : 'Alert nguồn'} #{c.source_alert_id} →
                   </Link>
                 )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {candidates.length > 0 && (
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-700">Breakout M3 gần đây</h3>
+              <p className="text-xs text-gray-400">Daily scan 25 ngày, không cần đợi cycle materialize</p>
+            </div>
+            <Link href="/cycles" className="text-xs text-orange-600 hover:underline">Xem danh sách →</Link>
+          </div>
+          <div className="space-y-2">
+            {candidates.map((c) => (
+              <div key={`${c.ticker}-${c.breakout_date}`} className="flex items-center justify-between text-sm">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold">{c.ticker}</span>
+                  <span className="text-gray-400">đột phá {formatDateICT(c.breakout_date)}</span>
+                  {c.cycle_id ? (
+                    <Link href={`/cycles/${c.cycle_id}`} className="text-xs text-orange-600 hover:underline">
+                      cycle →
+                    </Link>
+                  ) : (
+                    <span className="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">candidate</span>
+                  )}
+                </div>
+                <div className="text-right">
+                  <div className="font-semibold text-orange-600">{formatRatio(c.vol_ratio)}</div>
+                  <div className="text-xs text-gray-400">+{c.price_change_pct.toFixed(2)}%</div>
+                </div>
               </div>
             ))}
           </div>
