@@ -23,9 +23,11 @@ export default function DashboardPage() {
     refetchInterval: 60_000,
   })
 
-  const { data: candidatesData } = useQuery({
+  const { data: candidatesData, isError: candidatesError } = useQuery({
     queryKey: ['cycles', 'candidates', 'dashboard'],
     queryFn: () => cyclesApi.candidates({ days: 25, limit: 5 }),
+    retry: 1,
+    staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
   })
 
@@ -181,6 +183,12 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {candidatesError && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-700">
+          Không tải được danh sách breakout M3 gần đây. Backend scan đang chậm hoặc vừa timeout.
         </div>
       )}
 

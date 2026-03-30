@@ -5,6 +5,7 @@ import uuid
 from collections import defaultdict
 from datetime import date, timedelta
 from statistics import mean
+from time import monotonic
 from typing import Optional
 
 from app.config import settings
@@ -16,6 +17,8 @@ logger = logging.getLogger(__name__)
 _pool = None
 _redis = None
 _alert_queue = None
+_scan_history_cache: dict[int, tuple[float, dict]] = {}
+_SCAN_HISTORY_CACHE_TTL_SECS = 300
 
 # Phase names — match meeting-goc state machine
 PHASE_DISTRIBUTION = "distribution_in_progress"
@@ -51,6 +54,52 @@ async def _get_ticker_meta(ticker: str) -> dict:
             "game_type": row["game_type"] or "institutional",
         }
     return {"eligible": True, "game_type": "institutional"}
+
+
+async def _get_ticker_meta_map(tickers: list[str]) -> dict[str, dict]:
+    """Fetch M3 eligibility/game_type for many tickers in one query."""
+    if not tickers:
+        return {}
+
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT ticker, eligible_for_m3, game_type
+            FROM watchlist
+            WHERE ticker = ANY($1)
+            """,
+            tickers,
+        )
+
+    meta_map = {
+        r["ticker"]: {
+            "eligible": r["eligible_for_m3"] is not False,
+            "game_type": r["game_type"] or "institutional",
+        }
+        for r in rows
+    }
+    for ticker in tickers:
+        meta_map.setdefault(ticker, {"eligible": True, "game_type": "institutional"})
+    return meta_map
+
+
+def _get_cached_scan_history(days: int) -> Optional[dict]:
+    cached = _scan_history_cache.get(days)
+    if not cached:
+        return None
+    ts, result = cached
+    if monotonic() - ts > _SCAN_HISTORY_CACHE_TTL_SECS:
+        _scan_history_cache.pop(days, None)
+        return None
+    return result
+
+
+def _set_cached_scan_history(days: int, result: dict) -> None:
+    _scan_history_cache[days] = (monotonic(), result)
+
+
+def _invalidate_scan_history_cache() -> None:
+    _scan_history_cache.clear()
 
 
 async def check_intraday_breakout(ticker: str, bar: dict, alert_id: Optional[int] = None):
@@ -363,6 +412,7 @@ async def _create_cycle(
             })
 
         asyncio.create_task(notification.send_cycle_breakout_email(cycle_id))
+    _invalidate_scan_history_cache()
     return {
         "type": "breakout",
         "ticker": ticker,
@@ -422,6 +472,7 @@ async def _update_cycle(ticker: str, cycle: dict, recent_rows: list, ma20: float
             "close": round(today_close, 2),
             "zone_low": round(zone_low, 2),
         })
+        _invalidate_scan_history_cache()
         return events
 
     # --- 10-day warning ---
@@ -473,6 +524,7 @@ async def _update_cycle(ticker: str, cycle: dict, recent_rows: list, ma20: float
             "cycle_id": cycle_id,
             "trading_days_elapsed": elapsed,
         })
+        _invalidate_scan_history_cache()
     else:
         async with _pool.acquire() as conn:
             await conn.execute(
@@ -491,11 +543,17 @@ async def _update_cycle(ticker: str, cycle: dict, recent_rows: list, ma20: float
 
 # ── Historical M3 replay ───────────────────────────────────────────────────
 
-async def scan_history(days: int = 25) -> dict:
+async def scan_history(days: int = 25, use_cache: bool = True) -> dict:
     """Read-only M3 breakout scan over daily_ohlcv."""
+    if use_cache:
+        cached = _get_cached_scan_history(days)
+        if cached is not None:
+            return cached
+
     scan_start = date.today() - timedelta(days=days)
     cutoff = date.today() - timedelta(days=days + 15)
     tickers = await universe_service.get_active_tickers()
+    meta_map = await _get_ticker_meta_map(tickers)
 
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
@@ -531,7 +589,7 @@ async def scan_history(days: int = 25) -> dict:
         if len(trows) < 2:
             continue
 
-        meta = await _get_ticker_meta(ticker)
+        meta = meta_map.get(ticker, {"eligible": True, "game_type": "institutional"})
         if not meta["eligible"]:
             continue
 
@@ -570,7 +628,7 @@ async def scan_history(days: int = 25) -> dict:
                 })
 
     candidates.sort(key=lambda x: (x["breakout_date"], x["vol_ratio"]), reverse=True)
-    return {
+    result = {
         "breakout_candidates": candidates,
         "total": len(candidates),
         "tickers_with_data": len(by_ticker),
@@ -581,6 +639,9 @@ async def scan_history(days: int = 25) -> dict:
             "price_pct": settings.BREAKOUT_PRICE_PCT,
         },
     }
+    if use_cache:
+        _set_cached_scan_history(days, result)
+    return result
 
 async def replay_history(
     days: int = 25,
@@ -620,6 +681,7 @@ async def replay_history(
             )
 
     tickers = await universe_service.get_active_tickers()
+    meta_map = await _get_ticker_meta_map(tickers)
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -655,7 +717,7 @@ async def replay_history(
         if len(trows) < 2:
             continue
 
-        meta = await _get_ticker_meta(ticker)
+        meta = meta_map.get(ticker, {"eligible": True, "game_type": "institutional"})
         if not meta["eligible"]:
             continue
 
@@ -718,6 +780,7 @@ async def replay_history(
             candidates.append(candidate)
 
     if apply:
+        _invalidate_scan_history_cache()
         async with _pool.acquire() as conn:
             await conn.execute(
                 """

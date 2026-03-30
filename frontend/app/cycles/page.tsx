@@ -19,9 +19,11 @@ export default function CyclesPage() {
   })
 
   const cycles = data?.cycles ?? []
-  const { data: candidatesData, isLoading: candidatesLoading } = useQuery({
+  const { data: candidatesData, isLoading: candidatesLoading, isError: candidatesError } = useQuery({
     queryKey: ['cycles', 'candidates'],
     queryFn: () => cyclesApi.candidates({ days: 25, limit: 50 }),
+    retry: 1,
+    staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
   })
   const { data: health } = useQuery({
@@ -123,11 +125,17 @@ export default function CyclesPage() {
               Scan daily 25 ngày, hiện có dữ liệu cho {candidatesData?.tickers_with_data ?? '—'} mã
             </p>
           </div>
-          <span className="text-xs text-gray-400">{candidatesData?.total ?? 0} candidates</span>
+          <span className="text-xs text-gray-400">
+            {candidatesLoading ? 'Đang quét…' : `${candidatesData?.total ?? 0} candidates`}
+          </span>
         </div>
 
         {candidatesLoading ? (
           <div className="text-center py-8 text-gray-400">Đang tải breakout gần đây...</div>
+        ) : candidatesError ? (
+          <div className="text-center py-8 text-amber-600 border border-dashed border-amber-200 rounded-lg">
+            Không tải được breakout M3 gần đây. API scan đang chậm hoặc vừa timeout, thử tải lại sau.
+          </div>
         ) : candidates.length === 0 ? (
           <div className="text-center py-8 text-gray-400 border border-dashed border-gray-200 rounded-lg">
             Chưa có breakout M3 nào để hiển thị

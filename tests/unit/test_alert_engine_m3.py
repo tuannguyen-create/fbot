@@ -277,14 +277,13 @@ class TestReplayHistory:
         pool, conn = mock_pool
         rows = self._make_rows()
         conn.fetch = AsyncMock(side_effect=[
+            [FakeRow({"ticker": "HPG", "eligible_for_m3": True, "game_type": "institutional"})],  # watchlist meta
             rows,       # daily_ohlcv
             [],         # existing cycle_events
         ])
-        conn.fetchrow = AsyncMock(return_value=FakeRow({
-            "eligible_for_m3": True, "game_type": "institutional",
-        }))
 
-        with patch.object(settings, "WATCHLIST", ["HPG"]):
+        with patch.object(settings, "WATCHLIST", ["HPG"]), \
+             patch("app.services.alert_engine_m3.universe_service.get_active_tickers", new=AsyncMock(return_value=["HPG"])):
             result = await alert_engine_m3.replay_history(days=25, apply=False)
 
         results = result["candidates"]
@@ -299,16 +298,17 @@ class TestReplayHistory:
         pool, conn = mock_pool
         rows = self._make_rows()
         conn.fetch = AsyncMock(side_effect=[
+            [FakeRow({"ticker": "HPG", "eligible_for_m3": True, "game_type": "institutional"})],  # watchlist meta
             rows,   # daily_ohlcv
             [],     # existing cycles
         ])
         conn.fetchrow = AsyncMock(side_effect=[
-            FakeRow({"eligible_for_m3": True, "game_type": "institutional"}),  # _get_ticker_meta
             None,   # source_alert lookup (no alert found)
         ])
         conn.fetchval = AsyncMock(return_value=99)  # INSERT RETURNING id
 
         with patch.object(settings, "WATCHLIST", ["HPG"]), \
+             patch("app.services.alert_engine_m3.universe_service.get_active_tickers", new=AsyncMock(return_value=["HPG"])), \
              patch("app.services.alert_engine_m3.notification") as mock_notif:
             mock_notif.send_cycle_breakout_email = AsyncMock()
             mock_notif.send_m3_replay_digest = AsyncMock()
@@ -326,14 +326,13 @@ class TestReplayHistory:
         # Return existing cycle for the breakout date
         breakout_date = rows[-1]["date"]
         conn.fetch = AsyncMock(side_effect=[
+            [FakeRow({"ticker": "HPG", "eligible_for_m3": True, "game_type": "institutional"})],  # watchlist meta
             rows,
             [FakeRow({"ticker": "HPG", "breakout_date": breakout_date})],
         ])
-        conn.fetchrow = AsyncMock(return_value=FakeRow({
-            "eligible_for_m3": True, "game_type": "institutional",
-        }))
 
-        with patch.object(settings, "WATCHLIST", ["HPG"]):
+        with patch.object(settings, "WATCHLIST", ["HPG"]), \
+             patch("app.services.alert_engine_m3.universe_service.get_active_tickers", new=AsyncMock(return_value=["HPG"])):
             result = await alert_engine_m3.replay_history(days=25, apply=True)
 
         matching = [r for r in result["candidates"] if r["ticker"] == "HPG"]

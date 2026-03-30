@@ -27,7 +27,7 @@ function AlertsContent() {
   const router = useRouter()
 
   const ticker = params.get('ticker') ?? ''
-  const status = params.get('status') ?? ''
+  const status = params.get('status') ?? 'active'
   const magicOnly = params.get('magic_only') === 'true'
   const origin = (params.get('origin') ?? '') as 'live' | 'historical_replay' | 'recovery_replay' | ''
   const offset = Number(params.get('offset') ?? 0)
@@ -86,6 +86,7 @@ function AlertsContent() {
           onChange={(e) => updateFilter('status', e.target.value)}
           className="border border-gray-300 rounded px-2 py-1 text-sm"
         >
+          <option value="active">Đáng xem</option>
           <option value="">Tất cả</option>
           <option value="fired">Chờ xác nhận</option>
           <option value="confirmed">Xác nhận</option>
@@ -116,7 +117,8 @@ function AlertsContent() {
       </div>
 
       <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-600">
-        <p><b>Giờ thị trường</b> là phút đang được quét. <b>Chờ 15p</b> nghĩa là tín hiệu mới phát hiện, còn đợi xác nhận sau 15 phút.</p>
+        <p><b>Đáng xem</b> là mặc định chỉ hiện các alert còn cần chú ý: <b>Chờ 15p</b> và <b>Xác nhận</b>. Các trạng thái <b>Hết phiên</b> hoặc <b>Không xác nhận</b> vẫn được lưu để xem lại, nhưng bị ẩn khỏi mặc định.</p>
+        <p className="mt-1"><b>Giờ thị trường</b> là phút đang được quét. <b>Chờ 15p</b> nghĩa là tín hiệu mới phát hiện, còn đợi xác nhận sau 15 phút.</p>
         <p className="mt-1"><b>Hết phiên</b> nghĩa là alert xuất hiện quá muộn nên không còn đủ 15 phút để xác nhận trong cùng phiên. App giữ lại để xem lại, nhưng không coi là tín hiệu đã xác nhận.</p>
         <p className="mt-1"><b>Bên mua</b> = tỷ lệ khối lượng chủ động mua. <b>Chất lượng</b> = điểm A/B/C để ưu tiên xem trước, không phải lệnh mua tự động.</p>
       </div>

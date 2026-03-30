@@ -44,9 +44,12 @@ async def list_alerts(
         params.append(date_to)
         idx += 1
     if status:
-        conditions.append(f"status = ${idx}")
-        params.append(status)
-        idx += 1
+        if status == "active":
+            conditions.append("status IN ('fired', 'confirmed')")
+        else:
+            conditions.append(f"status = ${idx}")
+            params.append(status)
+            idx += 1
     if magic_only:
         conditions.append("in_magic_window = TRUE")
     if origin:
