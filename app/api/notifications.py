@@ -92,13 +92,13 @@ async def review_notifications(
         )
 
         drafts = []
-        if channel == "telegram" and window == "today":
+        if channel == "telegram":
             alert_rows = await conn.fetch(
-                """
+                f"""
                 SELECT a.id, a.ticker, a.status, a.fired_at, a.confirmed_at, a.ratio_5d, a.ratio_15m
                 FROM volume_alerts a
                 WHERE a.origin='live'
-                  AND DATE(a.bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') = (NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+                  AND DATE(a.bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') >= {start_expr}
                   AND a.status IN ('fired', 'confirmed', 'cancelled')
                   AND NOT EXISTS (
                         SELECT 1 FROM notification_log n
@@ -138,11 +138,11 @@ async def review_notifications(
                 })
 
             cycle_rows = await conn.fetch(
-                """
+                f"""
                 SELECT c.id, c.ticker, c.phase, c.created_at, c.breakout_date
                 FROM cycle_events c
                 WHERE c.origin='live'
-                  AND c.breakout_date = (NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+                  AND c.breakout_date >= {start_expr}
                   AND NOT EXISTS (
                         SELECT 1 FROM notification_log n
                         WHERE n.cycle_id = c.id AND n.channel='telegram'
@@ -168,28 +168,27 @@ async def review_notifications(
                 })
 
             replay_rows = await conn.fetch(
-                """
+                f"""
                 SELECT id, module, mode, created_count, started_at, finished_at
                 FROM replay_runs
                 WHERE notify_mode='digest'
                   AND status='done'
-                  AND (COALESCE(finished_at, started_at) AT TIME ZONE 'Asia/Ho_Chi_Minh')::date =
-                      (NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+                  AND (COALESCE(finished_at, started_at) AT TIME ZONE 'Asia/Ho_Chi_Minh')::date >= {start_expr}
                 ORDER BY COALESCE(finished_at, started_at) DESC
                 LIMIT 10
                 """
             )
             for row in replay_rows:
-                module = row["module"].upper()
                 finished_at = row["finished_at"] or row["started_at"]
+                event_type = f"{row['module']}_replay_digest"
                 drafts.append({
                     "id": f"draft-replay-{row['id']}",
                     "source": "draft",
                     "channel": channel,
                     "status": "not_sent",
                     "sent_at": finished_at.isoformat() if finished_at else None,
-                    "event_type": f"{row['module']}_replay_digest",
-                    "title": f"{module} replay digest",
+                    "event_type": event_type,
+                    "title": _event_label(event_type),
                     "preview_text": f"Run {row['mode']} đã tạo {row['created_count']} kết quả mới.",
                     "alert_id": None,
                     "cycle_id": None,
