@@ -8,6 +8,7 @@ const RECONNECT_DELAY = 5000
 
 export function useAlertStream() {
   const addAlert = useAlertStore((s) => s.addAlert)
+  const updateAlert = useAlertStore((s) => s.updateAlert)
   const setStreamStatus = useAlertStore((s) => s.setStreamStatus)
   const esRef = useRef<EventSource | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -28,6 +29,13 @@ export function useAlertStream() {
         } catch {}
       })
 
+      es.addEventListener('alert_status_update', (e: MessageEvent) => {
+        try {
+          const patch = JSON.parse(e.data) as Partial<AlertSummary> & { id: number }
+          if (patch.id != null) updateAlert(patch.id, patch)
+        } catch {}
+      })
+
       es.onopen = () => setStreamStatus('connected')
 
       es.onerror = () => {
@@ -44,5 +52,5 @@ export function useAlertStream() {
       if (esRef.current) esRef.current.close()
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
     }
-  }, [addAlert, setStreamStatus])
+  }, [addAlert, updateAlert, setStreamStatus])
 }

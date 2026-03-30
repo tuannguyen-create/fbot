@@ -68,7 +68,13 @@ export function LiveAlertFeed() {
             </div>
             <div className="flex items-center gap-1">
               <QualityBadge grade={alert.quality_grade} />
-              <AlertStatusBadge status={alert.status} />
+              <AlertStatusBadge
+                status={alert.status}
+                confirmWindowMinutes={alert.confirm_window_minutes}
+                confirmWindowTargetMinutes={alert.confirm_window_target_minutes}
+                confirmWindowAvailableMinutes={alert.confirm_window_available_minutes}
+                confirmWindowComplete={alert.confirm_window_complete}
+              />
             </div>
           </Link>
         ))}

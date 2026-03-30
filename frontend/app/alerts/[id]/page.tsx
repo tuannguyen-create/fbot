@@ -53,7 +53,13 @@ export default function AlertDetailPage({ params }: Props) {
           </div>
           <div className="flex items-center gap-2">
             <OriginBadge origin={alert.origin} />
-            <AlertStatusBadge status={alert.status} />
+            <AlertStatusBadge
+              status={alert.status}
+              confirmWindowMinutes={alert.confirm_window_minutes}
+              confirmWindowTargetMinutes={alert.confirm_window_target_minutes}
+              confirmWindowAvailableMinutes={alert.confirm_window_available_minutes}
+              confirmWindowComplete={alert.confirm_window_complete}
+            />
           </div>
         </div>
 
@@ -89,10 +95,10 @@ export default function AlertDetailPage({ params }: Props) {
           <div className="bg-gray-50 rounded p-3">
             <p className="text-xs text-gray-400 uppercase mb-1">Tỷ lệ 15 phút</p>
             <p className="font-semibold">
-              {alert.status === 'expired'
-                ? 'Hết phiên, không đủ 15p'
-                : alert.ratio_15m != null
-                  ? formatRatio(alert.ratio_15m)
+              {alert.ratio_15m != null
+                ? `${formatRatio(alert.ratio_15m)}${alert.confirm_window_minutes != null ? ` · ${alert.confirm_window_minutes}/${alert.confirm_window_target_minutes ?? 15}p` : ''}`
+                : alert.status === 'expired'
+                  ? `Hết phiên${alert.confirm_window_available_minutes != null ? ` · ${alert.confirm_window_available_minutes}/${alert.confirm_window_target_minutes ?? 15}p` : ''}`
                   : 'Chờ...'}
               {alert.confirmed_at && (
                 <span className="ml-1 text-xs text-gray-400">
@@ -100,6 +106,11 @@ export default function AlertDetailPage({ params }: Props) {
                   {formatDateTimeICT(alert.confirmed_at)})
                 </span>
               )}
+            </p>
+            <p className="mt-1 text-xs text-gray-400">
+              {alert.confirm_window_minutes != null && alert.confirm_window_minutes < (alert.confirm_window_target_minutes ?? 15)
+                ? `Cuối phiên chỉ còn ${alert.confirm_window_minutes}/${alert.confirm_window_target_minutes ?? 15} phút để kiểm lực duy trì.`
+                : `Chuẩn mặc định là ${alert.confirm_window_target_minutes ?? 15} phút để kiểm lực duy trì sau alert.`}
             </p>
           </div>
         </div>

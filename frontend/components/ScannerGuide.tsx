@@ -37,7 +37,8 @@ export function M1Guide({
       </p>
       <p>
         <b>Trạng thái</b>: <b>Chờ 15p</b> = vừa phát hiện, chưa qua xác nhận. <b>Xác nhận 15p</b> = lực duy trì tốt.
-        <b> Không xác nhận</b> = spike hụt lực sau đó.
+        <b> Không xác nhận</b> = spike hụt lực sau đó. Nếu tín hiệu đến cuối phiên, app vẫn lấy phần còn lại
+        của phiên và hiện rõ kiểu <b>8/15p</b>; dưới <b>5 phút</b> thì xếp <b>Hết phiên</b>.
       </p>
       <p>
         <b>Bên mua</b> = tỷ lệ khối lượng chủ động mua. <b>Chất lượng</b> = điểm A/B/C của nến, nền tích lũy,

@@ -218,8 +218,8 @@ function AlertsContent() {
 
       <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-600">
         <p><b>Đáng xem</b> là mặc định chỉ hiện các alert còn cần chú ý: <b>Chờ 15p</b> và <b>Xác nhận</b>. Các trạng thái <b>Hết phiên</b> hoặc <b>Không xác nhận</b> vẫn được lưu để xem lại, nhưng bị ẩn khỏi mặc định.</p>
-        <p className="mt-1"><b>Giờ thị trường</b> là phút đang được quét. <b>Chờ 15p</b> nghĩa là tín hiệu mới phát hiện, còn đợi xác nhận sau 15 phút.</p>
-        <p className="mt-1"><b>Hết phiên</b> nghĩa là alert xuất hiện quá muộn nên không còn đủ 15 phút để xác nhận trong cùng phiên. App giữ lại để xem lại, nhưng không coi là tín hiệu đã xác nhận.</p>
+        <p className="mt-1"><b>Giờ thị trường</b> là phút đang được quét. <b>Chờ 15p</b> nghĩa là tín hiệu mới phát hiện, còn đợi xác nhận sau 15 phút. Nếu xuất hiện quá muộn cuối phiên, app sẽ hiện rõ cửa sổ thực có như <b>5/15p</b> hoặc <b>8/15p</b>.</p>
+        <p className="mt-1"><b>Hết phiên</b> nghĩa là tín hiệu đến quá muộn và không đủ tối thiểu <b>5 phút</b> để đánh giá. Nếu còn từ <b>5-14 phút</b>, app vẫn tính tỷ lệ theo phần thực có và ghi rõ <b>X/15p</b> thay vì bỏ trắng.</p>
         <p className="mt-1"><b>Bên mua</b> = tỷ lệ khối lượng chủ động mua. <b>Chất lượng</b> = điểm A/B/C để ưu tiên xem trước, không phải lệnh mua tự động.</p>
         <p className="mt-1"><b>Mã M1 lặp nhiều</b> giúp nhìn ra mã bị kích hoạt volume abnormal lặp liên tục trong một cửa sổ ngắn. Đây là dấu hiệu để chú ý mã bị kéo mạnh hoặc bị bơm breakout nhiều nhịp.</p>
       </div>
@@ -298,7 +298,15 @@ function AlertsContent() {
                     <td className="px-4 py-2 text-right font-semibold text-orange-600">{formatRatio(a.ratio_5d)}</td>
                     <td className="px-4 py-2 text-right text-gray-600">{formatPct(a.bu_pct)}</td>
                     <td className="px-4 py-2 text-center"><QualityBadge grade={a.quality_grade} score={a.quality_score} reason={a.quality_reason} /></td>
-                    <td className="px-4 py-2 text-center"><AlertStatusBadge status={a.status} /></td>
+                    <td className="px-4 py-2 text-center">
+                      <AlertStatusBadge
+                        status={a.status}
+                        confirmWindowMinutes={a.confirm_window_minutes}
+                        confirmWindowTargetMinutes={a.confirm_window_target_minutes}
+                        confirmWindowAvailableMinutes={a.confirm_window_available_minutes}
+                        confirmWindowComplete={a.confirm_window_complete}
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -311,7 +319,13 @@ function AlertsContent() {
               <Link key={a.id} href={`/alerts/${a.id}`} className="block px-4 py-3">
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-semibold">{a.ticker} {a.in_magic_window && '⚡'}</span>
-                  <AlertStatusBadge status={a.status} />
+                  <AlertStatusBadge
+                    status={a.status}
+                    confirmWindowMinutes={a.confirm_window_minutes}
+                    confirmWindowTargetMinutes={a.confirm_window_target_minutes}
+                    confirmWindowAvailableMinutes={a.confirm_window_available_minutes}
+                    confirmWindowComplete={a.confirm_window_complete}
+                  />
                 </div>
                 <div className="text-xs text-gray-500 flex gap-3">
                   <span>{slotToTimeStr(a.slot)}</span>

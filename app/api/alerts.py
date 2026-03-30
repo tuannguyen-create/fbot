@@ -64,7 +64,11 @@ async def list_alerts(
         rows = await conn.fetch(
             f"""
             SELECT id, ticker, fired_at, bar_time, slot, volume, ratio_5d, bu_pct,
-                   in_magic_window, status, quality_grade, quality_score, origin, is_actionable
+                   in_magic_window, status, quality_grade, quality_score, origin, is_actionable,
+                   (features->>'confirm_window_minutes')::int AS confirm_window_minutes,
+                   COALESCE((features->>'confirm_window_target_minutes')::int, 15) AS confirm_window_target_minutes,
+                   COALESCE((features->>'confirm_window_available_minutes')::int, 15) AS confirm_window_available_minutes,
+                   COALESCE((features->>'confirm_window_complete')::boolean, FALSE) AS confirm_window_complete
             FROM volume_alerts {where}
             ORDER BY bar_time DESC
             LIMIT ${idx} OFFSET ${idx+1}
@@ -200,7 +204,11 @@ async def get_alert(alert_id: int, pool: asyncpg.Pool = Depends(get_db)):
                    confirmed_at, ratio_15m, email_sent, cycle_event_id,
                    features, quality_score, quality_grade, quality_reason,
                    strong_bull_candle, is_sideways_base,
-                   origin, replay_run_id, replayed_at, is_actionable
+                   origin, replay_run_id, replayed_at, is_actionable,
+                   (features->>'confirm_window_minutes')::int AS confirm_window_minutes,
+                   COALESCE((features->>'confirm_window_target_minutes')::int, 15) AS confirm_window_target_minutes,
+                   COALESCE((features->>'confirm_window_available_minutes')::int, 15) AS confirm_window_available_minutes,
+                   COALESCE((features->>'confirm_window_complete')::boolean, FALSE) AS confirm_window_complete
             FROM volume_alerts WHERE id=$1
             """,
             alert_id,

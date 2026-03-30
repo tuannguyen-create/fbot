@@ -416,14 +416,30 @@ async def send_volume_alert_confirmation(alert_id: int):
     time_str = slot_to_time_str(slot)
     ratio = alert.get("ratio_15m")
     ratio_str = f"{ratio:.2f}x" if ratio is not None else "N/A"
+    features = alert.get("features") or {}
+    if isinstance(features, str):
+        try:
+            features = json.loads(features)
+        except Exception:
+            features = {}
+    confirm_window_minutes = features.get("confirm_window_minutes")
+    confirm_window_target = features.get("confirm_window_target_minutes") or 15
+    window_label = (
+        f"{confirm_window_minutes}/{confirm_window_target}p"
+        if confirm_window_minutes and confirm_window_minutes < confirm_window_target
+        else "15p"
+    )
     icon = "✅" if status == "confirmed" else "⚪"
-    label = "Xác nhận M1" if status == "confirmed" else "Không xác nhận M1"
+    label = (
+        f"Xác nhận M1 {window_label}" if status == "confirmed"
+        else f"Không xác nhận M1 {window_label}"
+    )
     app_link = f"{settings.FRONTEND_URL}/alerts/{alert_id}"
 
     text = (
         f"{icon} <b>{ticker}</b> — {label}\n"
         f"⏱ Alert gốc: <b>{time_str} ICT</b>\n"
-        f"📊 Tỷ lệ 15p: <b>{ratio_str}</b>\n"
+        f"📊 Tỷ lệ {window_label}: <b>{ratio_str}</b>\n"
         f"<a href='{app_link}'>Xem alert →</a>"
     )
     await _send_telegram(text, alert_id=alert_id, event_type="m1_alert_confirmation")

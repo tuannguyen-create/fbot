@@ -21,7 +21,9 @@ _redis = None
 _alert_queue: Optional[asyncio.Queue] = None
 
 _LAST_TRADING_SLOT = 239
-_LAST_CONFIRMABLE_SLOT = _LAST_TRADING_SLOT - 15
+_TARGET_CONFIRM_WINDOW_SLOTS = 15
+_MIN_PARTIAL_CONFIRM_SLOTS = 5
+_LAST_CONFIRMABLE_SLOT = _LAST_TRADING_SLOT - _TARGET_CONFIRM_WINDOW_SLOTS + 1
 
 
 def inject_deps(pool, redis, alert_queue: asyncio.Queue = None):
@@ -35,6 +37,37 @@ def inject_deps(pool, redis, alert_queue: asyncio.Queue = None):
 # In-memory: pending 15-min confirmations
 # key = ticker, value = list[{alert_id, slot, confirm_by_slot, cumulative_volume, trade_date}]
 _pending_confirms: dict[str, list[dict]] = {}
+
+
+def _remaining_session_slots(slot: int) -> int:
+    return max(_LAST_TRADING_SLOT - slot + 1, 0)
+
+
+def _build_confirm_meta(
+    *,
+    available_slots: int,
+    elapsed_slots: Optional[int] = None,
+    end_slot: Optional[int] = None,
+    end_bar_time: Optional[datetime] = None,
+) -> dict:
+    meta = {
+        "confirm_window_target_minutes": _TARGET_CONFIRM_WINDOW_SLOTS,
+        "confirm_window_available_minutes": max(available_slots, 0),
+        "confirm_window_complete": bool(elapsed_slots is not None and elapsed_slots >= _TARGET_CONFIRM_WINDOW_SLOTS),
+    }
+    if elapsed_slots is not None:
+        meta["confirm_window_minutes"] = max(elapsed_slots, 0)
+    if end_slot is not None:
+        meta["confirm_window_end_slot"] = end_slot
+    if end_bar_time is not None:
+        meta["confirm_window_end_bar_time"] = end_bar_time.isoformat()
+    return meta
+
+
+def _settled_status_from_ratio(ratio_15m: float, elapsed_slots: int) -> str:
+    if elapsed_slots < _MIN_PARTIAL_CONFIRM_SLOTS:
+        return "expired"
+    return "confirmed" if ratio_15m >= settings.THRESHOLD_CONFIRM_15M else "cancelled"
 
 
 # ── Pure evaluation (no side effects) ─────────────────────────────────────
@@ -222,17 +255,27 @@ async def _settle_historical_alert(
     avg_5d = hit.get("avg_5d_hist", 0)
     expected_15m = avg_5d * elapsed_slots if avg_5d else 1
     ratio_15m = cumulative / expected_15m if expected_15m > 0 else 0
-    status = "confirmed" if ratio_15m >= settings.THRESHOLD_CONFIRM_15M else "cancelled"
-    # confirmed_at = end of the historical 15-min window (bar_time + 15min),
-    # NOT NOW() — so the UI shows the actual market time of confirmation,
-    # not the time the replay job ran.
+    status = _settled_status_from_ratio(ratio_15m, elapsed_slots)
+    slot = hit.get("slot")
+    if slot is None:
+        slot = get_slot(to_ict(bar_time).time()) or 0
+    confirm_meta = _build_confirm_meta(
+        available_slots=_remaining_session_slots(slot),
+        elapsed_slots=elapsed_slots,
+        end_slot=slot + elapsed_slots - 1,
+        end_bar_time=bar_time + timedelta(minutes=max(elapsed_slots - 1, 0)),
+    )
+    # confirmed_at = end of the observed market window, not NOW() — so the UI
+    # shows the actual market time of confirmation or partial end-of-session settle.
+    settled_at = bar_time + timedelta(minutes=max(elapsed_slots, 1))
     await conn.execute(
         """
         UPDATE volume_alerts
-        SET status=$1, confirmed_at=$2, ratio_15m=$3
-        WHERE id=$4
+        SET status=$1, confirmed_at=$2, ratio_15m=$3,
+            features = COALESCE(features, '{}'::jsonb) || $4::jsonb
+        WHERE id=$5
         """,
-        status, window_end, round(ratio_15m, 4), alert_id,
+        status, settled_at, round(ratio_15m, 4), json.dumps(confirm_meta), alert_id,
     )
 
 
@@ -719,8 +762,13 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
         "C"
     )
     quality_reason = features["quality_reason"]
-    initial_status = "expired" if slot > _LAST_CONFIRMABLE_SLOT else "fired"
+    available_confirm_slots = min(_remaining_session_slots(slot), _TARGET_CONFIRM_WINDOW_SLOTS)
+    initial_status = "fired"
     trade_date = bar_time.date() if isinstance(bar_time, datetime) else None
+    features = {
+        **features,
+        **_build_confirm_meta(available_slots=available_confirm_slots),
+    }
 
     try:
         async with _pool.acquire() as conn:
@@ -771,9 +819,10 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
             _pending_confirms.setdefault(ticker, []).append({
                 "alert_id": alert_id,
                 "slot": slot,
-                "confirm_by_slot": slot + 15,
+                "confirm_by_slot": slot + _TARGET_CONFIRM_WINDOW_SLOTS,
                 "cumulative_volume": bar["volume"],
                 "trade_date": trade_date,
+                "available_slots": available_confirm_slots,
             })
 
         logger.info(
@@ -798,13 +847,16 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
                     "quality_score": quality_score,
                     "quality_grade": quality_grade,
                     "quality_reason": quality_reason,
+                    "confirm_window_target_minutes": features.get("confirm_window_target_minutes"),
+                    "confirm_window_available_minutes": features.get("confirm_window_available_minutes"),
+                    "confirm_window_complete": features.get("confirm_window_complete"),
                 },
             })
 
-        # Email/Telegram notification only for actionable alerts.
-        # End-of-session alerts are still stored for analysis, but they do not
-        # have a full 15-minute confirmation window and should not spam users.
-        if initial_status == "fired":
+        # Email/Telegram notification only for alerts with a full 15-minute
+        # confirmation window. Late-session alerts are still shown on UI and
+        # settled at close with partial data, but they do not spam users early.
+        if initial_status == "fired" and slot <= _LAST_CONFIRMABLE_SLOT:
             asyncio.create_task(notification.send_volume_alert_email(alert_id))
 
         # Trigger M3 intraday breakout check (volume spike may = breakout day)
@@ -832,24 +884,37 @@ async def _check_confirmations(ticker: str, bar: dict, current_slot: int):
         if pending["trade_date"] != current_trade_date:
             try:
                 async with _pool.acquire() as conn:
+                    confirm_meta = _build_confirm_meta(
+                        available_slots=pending.get("available_slots", _remaining_session_slots(pending["slot"])),
+                        elapsed_slots=pending.get("available_slots", 0),
+                    )
                     await conn.execute(
                         """
                         UPDATE volume_alerts
-                        SET status='expired', confirmed_at=NOW()
+                        SET status='expired', confirmed_at=NOW(),
+                            features = COALESCE(features, '{}'::jsonb) || $2::jsonb
                         WHERE id=$1 AND status='fired'
                         """,
                         pending["alert_id"],
+                        json.dumps(confirm_meta),
                     )
                 if _alert_queue is not None:
                     await _alert_queue.put({
                         "type": "alert_status_update",
-                        "data": {"id": pending["alert_id"], "status": "expired", "ratio_15m": None},
+                        "data": {
+                            "id": pending["alert_id"],
+                            "status": "expired",
+                            "ratio_15m": None,
+                            **confirm_meta,
+                        },
                     })
             except Exception as e:
                 logger.error(f"M1 expire-crossday error: {e}")
             continue
 
-        if current_slot < pending["confirm_by_slot"]:
+        session_closing_partial = current_slot == _LAST_TRADING_SLOT and current_slot < pending["confirm_by_slot"]
+
+        if current_slot < pending["confirm_by_slot"] and not session_closing_partial:
             if current_slot == pending["slot"]:
                 # This is the completed bar for the same minute that triggered the alert.
                 pending["cumulative_volume"] = bar["volume"]
@@ -858,32 +923,50 @@ async def _check_confirmations(ticker: str, bar: dict, current_slot: int):
             remaining.append(pending)
             continue
 
+        if session_closing_partial:
+            if current_slot == pending["slot"]:
+                pending["cumulative_volume"] = bar["volume"]
+            else:
+                pending["cumulative_volume"] += bar["volume"]
+
         # 15 min elapsed — evaluate
         alert_id = pending["alert_id"]
         orig_slot = pending["slot"]
         cumulative = pending["cumulative_volume"]
-        elapsed_slots = current_slot - orig_slot
+        elapsed_slots = max(current_slot - orig_slot + (1 if session_closing_partial else 0), 0)
 
         baseline = await baseline_service.get_baseline(ticker, orig_slot)
         avg_5d = baseline.get("avg_5d", 0) if baseline else 0
         expected_15m = avg_5d * elapsed_slots if avg_5d else 1
         ratio_15m = cumulative / expected_15m if expected_15m > 0 else 0
 
-        status = "confirmed" if ratio_15m >= settings.THRESHOLD_CONFIRM_15M else "cancelled"
+        status = _settled_status_from_ratio(ratio_15m, elapsed_slots)
+        confirm_meta = _build_confirm_meta(
+            available_slots=pending.get("available_slots", _remaining_session_slots(orig_slot)),
+            elapsed_slots=elapsed_slots,
+            end_slot=current_slot,
+            end_bar_time=bar_time_utc,
+        )
 
         try:
             async with _pool.acquire() as conn:
                 await conn.execute(
                     """
                     UPDATE volume_alerts
-                    SET status=$1, confirmed_at=NOW(), ratio_15m=$2
-                    WHERE id=$3
+                    SET status=$1, confirmed_at=$2, ratio_15m=$3,
+                        features = COALESCE(features, '{}'::jsonb) || $4::jsonb
+                    WHERE id=$5
                     """,
                     status,
+                    bar_time_utc,
                     round(ratio_15m, 4),
+                    json.dumps(confirm_meta),
                     alert_id,
                 )
-            logger.info(f"M1 Confirm: {ticker} alert_id={alert_id} status={status} ratio_15m={ratio_15m:.2f}")
+            logger.info(
+                f"M1 Confirm: {ticker} alert_id={alert_id} status={status} "
+                f"ratio_15m={ratio_15m:.2f} window={elapsed_slots}/{_TARGET_CONFIRM_WINDOW_SLOTS}"
+            )
 
             # SSE push — update clients with new status
             if _alert_queue is not None:
@@ -893,10 +976,12 @@ async def _check_confirmations(ticker: str, bar: dict, current_slot: int):
                         "id": alert_id,
                         "status": status,
                         "ratio_15m": round(ratio_15m, 2),
+                        **confirm_meta,
                     },
                 })
 
-            asyncio.create_task(notification.send_volume_alert_confirmation(alert_id))
+            if status in {"confirmed", "cancelled"}:
+                asyncio.create_task(notification.send_volume_alert_confirmation(alert_id))
         except Exception as e:
             logger.error(f"M1 confirm error: {e}")
 

@@ -14,6 +14,10 @@ export interface AlertSummary {
   quality_reason?: string | null
   origin: 'live' | 'historical_replay' | 'recovery_replay'
   is_actionable: boolean
+  confirm_window_minutes?: number | null
+  confirm_window_target_minutes?: number | null
+  confirm_window_available_minutes?: number | null
+  confirm_window_complete?: boolean | null
 }
 
 export interface M1Features {
