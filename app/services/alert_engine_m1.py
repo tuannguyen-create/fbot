@@ -755,6 +755,8 @@ async def _check_confirmations(ticker: str, bar: dict, current_slot: int):
                     "ratio_15m": round(ratio_15m, 2),
                 },
             })
+
+        asyncio.create_task(notification.send_volume_alert_confirmation(alert_id))
     except Exception as e:
         logger.error(f"M1 confirm error: {e}")
 

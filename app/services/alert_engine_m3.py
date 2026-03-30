@@ -137,19 +137,38 @@ async def run_daily():
 
     logger.info("M3 daily analysis started")
     tickers = await universe_service.get_active_tickers()
+    summary = {
+        "breakouts": [],
+        "ten_day_warnings": [],
+        "bottoming_candidates": [],
+        "invalidations": [],
+    }
     for ticker in tickers:
         try:
-            await _analyze_ticker(ticker)
+            result = await _analyze_ticker(ticker)
+            if result:
+                summary["breakouts"].extend(result["breakouts"])
+                summary["ten_day_warnings"].extend(result["ten_day_warnings"])
+                summary["bottoming_candidates"].extend(result["bottoming_candidates"])
+                summary["invalidations"].extend(result["invalidations"])
         except Exception as e:
             logger.error(f"M3 analysis error for {ticker}: {e}", exc_info=True)
+    if any(summary.values()):
+        await notification.send_m3_daily_digest(date.today(), summary)
     logger.info("M3 daily analysis complete")
 
 
 async def _analyze_ticker(ticker: str):
+    summary = {
+        "breakouts": [],
+        "ten_day_warnings": [],
+        "bottoming_candidates": [],
+        "invalidations": [],
+    }
     meta = await _get_ticker_meta(ticker)
     if not meta["eligible"]:
         logger.debug(f"M3 skip {ticker}: not eligible")
-        return
+        return summary
 
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
@@ -164,7 +183,7 @@ async def _analyze_ticker(ticker: str):
         )
 
     if len(rows) < 2:
-        return
+        return summary
 
     # rows are newest-first, reverse for chronological
     rows = list(reversed(rows))
@@ -173,7 +192,7 @@ async def _analyze_ticker(ticker: str):
 
     volumes = [r["volume"] for r in rows if r["volume"]]
     if len(volumes) < 3:
-        return
+        return summary
 
     ma20 = mean(volumes[-20:]) if len(volumes) >= 20 else mean(volumes)
 
@@ -206,7 +225,14 @@ async def _analyze_ticker(ticker: str):
             await _create_cycle(ticker, today_row, ma20, meta["game_type"],
                                 vol_ratio=vol_ratio, price_chg=price_chg,
                                 alert_id=today_alert_id)
-            return
+            summary["breakouts"].append({
+                "ticker": ticker,
+                "breakout_date": today_row["date"],
+                "vol_ratio": round(vol_ratio, 2),
+                "price_change_pct": round(price_chg * 100, 2),
+                "game_type": meta["game_type"],
+            })
+            return summary
 
     # --- Update existing active cycles ---
     async with _pool.acquire() as conn:
@@ -215,7 +241,15 @@ async def _analyze_ticker(ticker: str):
             ticker, list(PHASES_ACTIVE),
         )
     for cycle in cycles:
-        await _update_cycle(ticker, dict(cycle), rows, ma20)
+        updates = await _update_cycle(ticker, dict(cycle), rows, ma20)
+        for event in updates:
+            if event["type"] == "ten_day_warning":
+                summary["ten_day_warnings"].append(event)
+            elif event["type"] == "bottoming_candidate":
+                summary["bottoming_candidates"].append(event)
+            elif event["type"] == "invalidated":
+                summary["invalidations"].append(event)
+    return summary
 
 
 async def _create_cycle(
@@ -329,9 +363,19 @@ async def _create_cycle(
             })
 
         asyncio.create_task(notification.send_cycle_breakout_email(cycle_id))
+    return {
+        "type": "breakout",
+        "ticker": ticker,
+        "cycle_id": cycle_id,
+        "breakout_date": breakout_date,
+        "vol_ratio": round(vol_ratio, 2),
+        "price_change_pct": round(price_chg * 100, 2),
+        "game_type": game_type,
+    }
 
 
 async def _update_cycle(ticker: str, cycle: dict, recent_rows: list, ma20: float):
+    events: list[dict] = []
     cycle_id = cycle["id"]
     breakout_date = cycle["breakout_date"]
     breakout_price = float(cycle.get("breakout_price") or 0)
@@ -371,7 +415,14 @@ async def _update_cycle(ticker: str, cycle: dict, recent_rows: list, ma20: float
             f"M3 Cycle invalidated: {ticker} id={cycle_id} "
             f"close={today_close:.0f} < zone_low={zone_low:.0f}"
         )
-        return
+        events.append({
+            "type": "invalidated",
+            "ticker": ticker,
+            "cycle_id": cycle_id,
+            "close": round(today_close, 2),
+            "zone_low": round(zone_low, 2),
+        })
+        return events
 
     # --- 10-day warning ---
     if remaining <= settings.ALERT_DAYS_BEFORE_CYCLE and not cycle["alert_sent_10d"]:
@@ -381,6 +432,12 @@ async def _update_cycle(ticker: str, cycle: dict, recent_rows: list, ma20: float
             )
         asyncio.create_task(notification.send_cycle_10day_warning_email(cycle_id))
         logger.info(f"M3 10-day warning sent: {ticker} cycle_id={cycle_id}")
+        events.append({
+            "type": "ten_day_warning",
+            "ticker": ticker,
+            "cycle_id": cycle_id,
+            "days_remaining": remaining,
+        })
 
     # --- Bottoming candidate: 3 consecutive days vol < 50% MA20 ---
     last_vols = [r["volume"] for r in recent_rows[-3:] if r["volume"]]
@@ -410,6 +467,12 @@ async def _update_cycle(ticker: str, cycle: dict, recent_rows: list, ma20: float
             )
         asyncio.create_task(notification.send_cycle_bottom_email(cycle_id))
         logger.info(f"M3 Bottoming candidate: {ticker} cycle_id={cycle_id} elapsed={elapsed}d")
+        events.append({
+            "type": "bottoming_candidate",
+            "ticker": ticker,
+            "cycle_id": cycle_id,
+            "trading_days_elapsed": elapsed,
+        })
     else:
         async with _pool.acquire() as conn:
             await conn.execute(
@@ -423,6 +486,7 @@ async def _update_cycle(ticker: str, cycle: dict, recent_rows: list, ma20: float
                 remaining,
                 elapsed,
             )
+    return events
 
 
 # ── Historical M3 replay ───────────────────────────────────────────────────

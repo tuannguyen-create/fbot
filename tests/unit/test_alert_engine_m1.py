@@ -275,6 +275,37 @@ class TestConfirmation:
         # cumulative_volume must be untouched
         assert alert_engine_m1._pending_confirms["HPG"]["cumulative_volume"] == 100_000
 
+    @pytest.mark.asyncio
+    async def test_confirm_status_schedules_telegram_followup(self, injected_m1):
+        """15-minute settlement should queue a Telegram follow-up."""
+        pool, conn, redis, queue = injected_m1
+        alert_engine_m1._pending_confirms["HPG"] = {
+            "alert_id": 88,
+            "slot": 15,
+            "confirm_by_slot": 30,
+            "cumulative_volume": 15_000_000,
+        }
+        bar = {
+            "ticker": "HPG",
+            "bar_time": datetime(2026, 3, 18, 2, 30, 0, tzinfo=timezone.utc),
+            "volume": 0,
+            "bu": 0, "sd": 0, "fb": 0, "fs": 0, "fn": 0,
+        }
+        conn.execute = AsyncMock()
+
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
+             patch("app.services.alert_engine_m1.notification") as mock_notif, \
+             patch("app.services.alert_engine_m1.asyncio.create_task") as mock_create_task:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
+            mock_notif.send_volume_alert_confirmation = AsyncMock()
+            await alert_engine_m1._check_confirmations("HPG", bar, current_slot=30)
+
+        mock_create_task.assert_called_once()
+        mock_notif.send_volume_alert_confirmation.assert_called_once_with(88)
+        scheduled = mock_create_task.call_args[0][0]
+        assert asyncio.iscoroutine(scheduled)
+        scheduled.close()
+
 
 # ── TestEvaluateBar ────────────────────────────────────────────────────────
 

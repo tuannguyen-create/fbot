@@ -338,3 +338,56 @@ class TestReplayHistory:
 
         matching = [r for r in result["candidates"] if r["ticker"] == "HPG"]
         assert all(not r["created"] for r in matching)
+
+
+class TestRunDailyDigest:
+    @pytest.fixture(autouse=True)
+    def inject_m3(self, mock_pool):
+        pool, _ = mock_pool
+        alert_engine_m3.inject_deps(pool, None, None)
+
+    @pytest.mark.asyncio
+    async def test_run_daily_sends_digest_when_events_exist(self):
+        summary_a = {
+            "breakouts": [{"ticker": "AAA", "vol_ratio": 4.2, "price_change_pct": 5.1, "game_type": "institutional"}],
+            "ten_day_warnings": [],
+            "bottoming_candidates": [],
+            "invalidations": [],
+        }
+        summary_b = {
+            "breakouts": [],
+            "ten_day_warnings": [{"ticker": "NVL", "days_remaining": 8}],
+            "bottoming_candidates": [{"ticker": "PDR", "trading_days_elapsed": 20}],
+            "invalidations": [],
+        }
+
+        with patch("app.services.alert_engine_m3.universe_service.get_active_tickers", new=AsyncMock(return_value=["AAA", "NVL"])), \
+             patch("app.services.alert_engine_m3._analyze_ticker", new=AsyncMock(side_effect=[summary_a, summary_b])), \
+             patch("app.services.alert_engine_m3.notification") as mock_notif, \
+             patch("app.services.alert_engine_m3.is_trading_day", return_value=True):
+            mock_notif.send_m3_daily_digest = AsyncMock()
+            await alert_engine_m3.run_daily()
+
+        mock_notif.send_m3_daily_digest.assert_awaited_once()
+        sent_summary = mock_notif.send_m3_daily_digest.call_args[0][1]
+        assert len(sent_summary["breakouts"]) == 1
+        assert len(sent_summary["ten_day_warnings"]) == 1
+        assert len(sent_summary["bottoming_candidates"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_run_daily_skips_digest_when_no_events(self):
+        empty = {
+            "breakouts": [],
+            "ten_day_warnings": [],
+            "bottoming_candidates": [],
+            "invalidations": [],
+        }
+
+        with patch("app.services.alert_engine_m3.universe_service.get_active_tickers", new=AsyncMock(return_value=["AAA"])), \
+             patch("app.services.alert_engine_m3._analyze_ticker", new=AsyncMock(return_value=empty)), \
+             patch("app.services.alert_engine_m3.notification") as mock_notif, \
+             patch("app.services.alert_engine_m3.is_trading_day", return_value=True):
+            mock_notif.send_m3_daily_digest = AsyncMock()
+            await alert_engine_m3.run_daily()
+
+        mock_notif.send_m3_daily_digest.assert_not_called()

@@ -316,6 +316,36 @@ async def send_volume_alert_email(alert_id: int):
     )
 
 
+async def send_volume_alert_confirmation(alert_id: int):
+    """Telegram follow-up when the 15-minute M1 confirmation settles."""
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM volume_alerts WHERE id=$1", alert_id)
+    if not row:
+        return
+
+    alert = dict(row)
+    status = alert.get("status")
+    if status not in {"confirmed", "cancelled"}:
+        return
+
+    ticker = alert["ticker"]
+    slot = alert["slot"]
+    time_str = slot_to_time_str(slot)
+    ratio = alert.get("ratio_15m")
+    ratio_str = f"{ratio:.2f}x" if ratio is not None else "N/A"
+    icon = "✅" if status == "confirmed" else "⚪"
+    label = "Xác nhận M1" if status == "confirmed" else "Không xác nhận M1"
+    app_link = f"{settings.FRONTEND_URL}/alerts/{alert_id}"
+
+    text = (
+        f"{icon} <b>{ticker}</b> — {label}\n"
+        f"⏱ Alert gốc: <b>{time_str} ICT</b>\n"
+        f"📊 Tỷ lệ 15p: <b>{ratio_str}</b>\n"
+        f"<a href='{app_link}'>Xem alert →</a>"
+    )
+    await _send_telegram(text)
+
+
 async def send_cycle_breakout_email(cycle_id: int):
     async with _pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM cycle_events WHERE id=$1", cycle_id)
@@ -400,6 +430,53 @@ async def send_cycle_bottom_email(cycle_id: int):
     )
 
 
+async def send_m3_daily_digest(trade_date, summary: dict) -> None:
+    """Telegram digest for M3 daily scheduler results."""
+    breakouts = summary.get("breakouts", [])
+    warnings = summary.get("ten_day_warnings", [])
+    bottoms = summary.get("bottoming_candidates", [])
+    invalidations = summary.get("invalidations", [])
+
+    if not any([breakouts, warnings, bottoms, invalidations]):
+        return
+
+    date_str = trade_date.strftime("%d/%m/%Y") if hasattr(trade_date, "strftime") else str(trade_date)
+    lines = [f"<b>📘 M3 DAILY {date_str}</b>"]
+
+    if breakouts:
+        lines.append(f"📈 Breakout mới: {len(breakouts)}")
+        for item in breakouts[:5]:
+            lines.append(
+                f"  • {item['ticker']} {item['vol_ratio']:.1f}x, +{item['price_change_pct']:.1f}%"
+            )
+        if len(breakouts) > 5:
+            lines.append(f"  … +{len(breakouts) - 5} mã khác")
+
+    if warnings:
+        lines.append(f"⏰ Sắp vào cửa sổ: {len(warnings)}")
+        for item in warnings[:5]:
+            lines.append(f"  • {item['ticker']} còn ~{item['days_remaining']} ngày GD")
+        if len(warnings) > 5:
+            lines.append(f"  … +{len(warnings) - 5} mã khác")
+
+    if bottoms:
+        lines.append(f"🟢 Tín hiệu tạo đáy: {len(bottoms)}")
+        for item in bottoms[:5]:
+            lines.append(f"  • {item['ticker']} sau {item['trading_days_elapsed']} ngày phân phối")
+        if len(bottoms) > 5:
+            lines.append(f"  … +{len(bottoms) - 5} mã khác")
+
+    if invalidations:
+        lines.append(f"🔴 Mất vùng breakout: {len(invalidations)}")
+        for item in invalidations[:5]:
+            lines.append(f"  • {item['ticker']}")
+        if len(invalidations) > 5:
+            lines.append(f"  … +{len(invalidations) - 5} mã khác")
+
+    lines.append(f"<a href='{settings.FRONTEND_URL}/cycles'>Xem M3 →</a>")
+    await _send_telegram("\n".join(lines))
+
+
 # ── Replay digest notifications ────────────────────────────────────────────
 
 async def send_m1_replay_digest(
@@ -444,20 +521,20 @@ async def send_m3_replay_digest(
     mode_map = {"bootstrap": "BOOTSTRAP", "recovery": "KHÔI PHỤC", "manual": "THỦ CÔNG"}
     label = mode_map.get(mode, mode.upper())
 
-    new_cycles = [c for c in candidates if c.get("created")]
+    highlight = [c for c in candidates if c.get("created")] or candidates
     lines = []
-    for c in new_cycles[:5]:
+    for c in highlight[:5]:
         lines.append(
             f"  • {c['ticker']} {c['breakout_date']} "
             f"({c['vol_ratio']}x, +{c['price_change_pct']}%)"
         )
-    if len(new_cycles) > 5:
-        lines.append(f"  … +{len(new_cycles) - 5} cycle khác")
+    if len(highlight) > 5:
+        lines.append(f"  … +{len(highlight) - 5} mã khác")
 
     text = (
         f"<b>📈 M3 {label} {days} ngày</b>\n"
         f"Tạo mới: {created} cycle | Tổng candidates: {len(candidates)}\n"
-        + ("\n".join(lines) if lines else "  (không có cycle mới)")
+        + ("\n".join(lines) if lines else "  (không có candidate)")
         + f"\n<i>Run: {run_id[:8]}</i>"
     )
     await _send_telegram(text)
