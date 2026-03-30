@@ -131,39 +131,100 @@ async def _persist_bars(bars: list[dict]) -> int:
     return len(rows)
 
 
-async def backfill_historical(days: int = 25) -> int:
+async def backfill_historical(days: int = 25, with_summary: bool = False):
     """
     Fetch and persist last N days of daily OHLCV from FiinQuantX.
     Called at startup to bootstrap M3 analysis.
 
-    Iterates through ALL active tickers in batches of FIINQUANT_TICKER_LIMIT
-    (the per-API-call limit). Returns total bars upserted.
+    Strategy:
+      1. REST path (primary) — proven for 727+ tickers, no per-call limit,
+         concurrent HTTP via TradingView/GetStockChartData. OHLCV only.
+      2. SDK path (fallback) — if REST returns 0 bars, fall back to
+         Fetch_Trading_Data in batches. Has bu/sd/fb/fs/fn but ticker-limited.
+
+    Returns total bars upserted by default.
+    If `with_summary=True`, returns a dict with coverage details.
     """
     tickers = await universe_service.get_active_tickers(force_refresh=True)
     if not tickers:
         logger.warning("Skipping daily OHLCV backfill: active universe is empty")
-        return 0
+        summary = {
+            "days": days,
+            "total_tickers": 0,
+            "rest_tickers_with_rows": 0,
+            "rest_empty_tickers": 0,
+            "rest_failed_tickers": 0,
+            "sdk_fallback_tickers": 0,
+            "bars_upserted": 0,
+        }
+        return summary if with_summary else 0
 
-    batch_size = min(_FETCH_BATCH_SIZE, settings.FIINQUANT_TICKER_LIMIT)
-    num_batches = (len(tickers) + batch_size - 1) // batch_size
-    logger.info(
-        f"Starting daily OHLCV backfill (last {days} days) for {len(tickers)} tickers "
-        f"in {num_batches} batch(es) of {batch_size}"
-    )
     loop = asyncio.get_running_loop()
-    total_count = 0
-    for i in range(0, len(tickers), batch_size):
-        batch = tickers[i:i + batch_size]
-        bars = await loop.run_in_executor(
-            None, lambda batch=batch: _fetch_historical_blocking(batch, days)
+    summary = {
+        "days": days,
+        "total_tickers": len(tickers),
+        "rest_tickers_with_rows": 0,
+        "rest_empty_tickers": 0,
+        "rest_failed_tickers": 0,
+        "sdk_fallback_tickers": 0,
+        "bars_upserted": 0,
+    }
+
+    # Phase 1: REST — concurrent per-ticker HTTP, no ticker limit
+    logger.info(
+        f"Daily OHLCV backfill: trying REST path for {len(tickers)} tickers "
+        f"(last {days} days)"
+    )
+    missing_tickers = list(tickers)
+    try:
+        from app.services.fiinquant_rest import fetch_daily_bars_with_status_blocking
+
+        rest_result = await loop.run_in_executor(
+            None, lambda: fetch_daily_bars_with_status_blocking(tickers, days)
         )
-        total_count += await _persist_bars(bars)
+        rest_count = await _persist_bars(rest_result.bars)
+        summary["rest_tickers_with_rows"] = len(rest_result.tickers_with_rows)
+        summary["rest_empty_tickers"] = len(rest_result.empty_tickers)
+        summary["rest_failed_tickers"] = len(rest_result.failed_tickers)
+        summary["bars_upserted"] += rest_count
+        missing_tickers = rest_result.empty_tickers + rest_result.failed_tickers
         logger.info(
-            f"Daily OHLCV backfill batch {i // batch_size + 1}/{num_batches}: "
-            f"{len(batch)} tickers, {len(bars)} rows"
+            f"Daily OHLCV backfill (REST) partial result: {rest_count} rows, "
+            f"{len(missing_tickers)} ticker(s) still missing"
         )
-    logger.info(f"Daily OHLCV backfill complete: {total_count} rows upserted")
-    return total_count
+    except Exception as e:
+        logger.warning(f"REST daily backfill failed: {e}")
+        rest_count = 0
+
+    # Phase 2: SDK fallback — only for tickers still missing after REST
+    if missing_tickers:
+        summary["sdk_fallback_tickers"] = len(missing_tickers)
+        logger.info(
+            f"REST missing {len(missing_tickers)} ticker(s) — falling back to SDK path"
+        )
+        logger.info(
+            f"Starting daily OHLCV backfill (SDK, last {days} days) for {len(missing_tickers)} "
+            f"tickers in batches"
+        )
+        batch_size = min(_FETCH_BATCH_SIZE, settings.FIINQUANT_TICKER_LIMIT)
+        num_batches = (len(missing_tickers) + batch_size - 1) // batch_size
+        sdk_count = 0
+        for i in range(0, len(missing_tickers), batch_size):
+            batch = missing_tickers[i:i + batch_size]
+            bars = await loop.run_in_executor(
+                None, lambda batch=batch: _fetch_historical_blocking(batch, days)
+            )
+            sdk_count += await _persist_bars(bars)
+            logger.info(
+                f"Daily OHLCV backfill batch {i // batch_size + 1}/{num_batches}: "
+                f"{len(batch)} tickers, {len(bars)} rows"
+            )
+        summary["bars_upserted"] += sdk_count
+        logger.info(f"Daily OHLCV backfill (SDK) complete: {sdk_count} rows upserted")
+    else:
+        logger.info("REST covered all requested tickers — SDK fallback skipped")
+
+    return summary if with_summary else summary["bars_upserted"]
 
 
 async def aggregate_today():

@@ -216,13 +216,10 @@ async def _upsert_intraday(bars: list[dict]) -> int:
 # ── Public API ─────────────────────────────────────────────────────────────
 
 async def check_needs_backfill() -> bool:
-    """Return True if fewer than half the active tickers have ≥5 days of 1m data.
-
-    Since backfill_intraday() now iterates through ALL active tickers in batches,
-    we check the full active universe.
-    """
+    """Return True if fewer than half the effective intraday tickers have ≥5 days of 1m data."""
     tickers = await universe_service.get_active_tickers()
-    if not tickers:
+    effective = tickers[:settings.EFFECTIVE_INTRADAY_TICKER_LIMIT]
+    if not effective:
         return False
     async with _pool.acquire() as conn:
         covered = await conn.fetchval(
@@ -238,9 +235,9 @@ async def check_needs_backfill() -> bool:
                 HAVING COUNT(DISTINCT DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')) >= 5
             ) t
             """,
-            tickers,
+            effective,
         )
-    threshold = max(len(tickers) // 2, 1)
+    threshold = max(len(effective) // 2, 1)
     return (covered or 0) < threshold
 
 
@@ -254,8 +251,8 @@ async def backfill_intraday(days: int | None = None) -> int:
     if chunked into smaller requests, because the provider rejects any from_date
     beyond the retention boundary.
 
-    Iterates ALL active tickers in batches of FIINQUANT_TICKER_LIMIT
-    (the per-API-call limit). Rebuilds baselines when done.
+    Uses the effective intraday universe, capped by EFFECTIVE_INTRADAY_TICKER_LIMIT,
+    then fetches in smaller per-call batches. Rebuilds baselines when done.
     """
     retention_days = settings.FIINQUANT_INTRADAY_HISTORY_DAYS
     to_date = date.today() - timedelta(days=1)  # up to yesterday
@@ -292,7 +289,15 @@ async def backfill_intraday(days: int | None = None) -> int:
         logger.warning("Skipping 1m intraday backfill: active universe is empty")
         return 0
 
-    batch_size = min(_FETCH_BATCH_SIZE, settings.FIINQUANT_TICKER_LIMIT)
+    intraday_limit = settings.EFFECTIVE_INTRADAY_TICKER_LIMIT
+    if len(tickers) > intraday_limit:
+        logger.warning(
+            f"Active universe ({len(tickers)}) exceeds FiinQuantX intraday ticker limit "
+            f"({intraday_limit}) — backfilling first {intraday_limit} tickers only"
+        )
+        tickers = tickers[:intraday_limit]
+
+    batch_size = min(_FETCH_BATCH_SIZE, intraday_limit)
     num_batches = (len(tickers) + batch_size - 1) // batch_size
 
     logger.info(

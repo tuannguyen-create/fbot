@@ -25,6 +25,11 @@ export interface AppSettings {
   active_ticker_count: number
   effective_ticker_count: number
   fiinquant_ticker_limit: number
+  effective_daily_ticker_count?: number
+  effective_stream_ticker_count?: number
+  fiinquant_stream_ticker_limit?: number
+  effective_intraday_ticker_count?: number
+  fiinquant_intraday_ticker_limit?: number
   stream_status: 'connected' | 'disconnected'
 }
 
@@ -34,5 +39,13 @@ export interface HealthStatus {
   stream: 'connected' | 'disconnected'
   stream_reason: 'outside_hours' | 'connecting' | 'reconnecting' | 'error' | null
   last_bar_time: string | null
+  active_ticker_count?: number
+  effective_ticker_count?: number
+  fiinquant_ticker_limit?: number
+  effective_stream_ticker_count?: number
+  fiinquant_stream_ticker_limit?: number
+  effective_intraday_ticker_count?: number
+  fiinquant_intraday_ticker_limit?: number
+  effective_daily_ticker_count?: number
   timestamp: string
 }

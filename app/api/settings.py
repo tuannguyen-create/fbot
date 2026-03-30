@@ -40,8 +40,13 @@ async def get_settings(pool: asyncpg.Pool = Depends(get_db)):
             "breakout_price_pct": float(db_cfg.get("breakout_price_pct", app_settings.BREAKOUT_PRICE_PCT)),
             "alert_days_before_cycle": int(db_cfg.get("alert_days_before_cycle", app_settings.ALERT_DAYS_BEFORE_CYCLE)),
             "active_ticker_count": len(active_tickers),
-            "fiinquant_ticker_limit": app_settings.FIINQUANT_TICKER_LIMIT,
-            "effective_ticker_count": min(len(active_tickers), app_settings.FIINQUANT_TICKER_LIMIT),
+            "fiinquant_ticker_limit": app_settings.EFFECTIVE_STREAM_TICKER_LIMIT,  # legacy / stream-compatible
+            "effective_ticker_count": min(len(active_tickers), app_settings.EFFECTIVE_STREAM_TICKER_LIMIT),
+            "fiinquant_stream_ticker_limit": app_settings.EFFECTIVE_STREAM_TICKER_LIMIT,
+            "effective_stream_ticker_count": min(len(active_tickers), app_settings.EFFECTIVE_STREAM_TICKER_LIMIT),
+            "fiinquant_intraday_ticker_limit": app_settings.EFFECTIVE_INTRADAY_TICKER_LIMIT,
+            "effective_intraday_ticker_count": min(len(active_tickers), app_settings.EFFECTIVE_INTRADAY_TICKER_LIMIT),
+            "effective_daily_ticker_count": len(active_tickers),
             "stream_status": stream_ingester.get_status(),
         },
     }

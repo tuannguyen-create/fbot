@@ -201,6 +201,20 @@ class TestRefreshActiveTickers:
         assert len(stream_ingester._ACTIVE_TICKERS) == 705
         assert len(stream_ingester._WATCHLIST_SET) == 705
 
+    @pytest.mark.asyncio
+    async def test_uses_stream_limit_when_separate_from_daily(self):
+        tickers = [f"T{i:03d}" for i in range(705)]
+
+        with patch(
+            "app.services.stream_ingester.universe_service.get_active_tickers",
+            new=AsyncMock(return_value=tickers),
+        ), patch.object(stream_ingester.settings, "FIINQUANT_TICKER_LIMIT", 731), \
+             patch.object(stream_ingester.settings, "FIINQUANT_STREAM_TICKER_LIMIT", 100):
+            await stream_ingester._refresh_active_tickers()
+
+        assert len(stream_ingester._ACTIVE_TICKERS) == 100
+        assert len(stream_ingester._WATCHLIST_SET) == 100
+
 
 # ── Disconnect flush ───────────────────────────────────────────────────────
 

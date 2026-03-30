@@ -120,11 +120,18 @@ export default function SettingsPage() {
 
       {/* Info */}
       <div className="bg-gray-50 rounded-lg border border-gray-200 p-4 text-sm text-gray-500">
-        <p>Theo dõi: <b>{settings?.active_ticker_count ?? 33}</b> mã active
-          {settings && settings.active_ticker_count > settings.fiinquant_ticker_limit && (
-            <span className="text-orange-500 ml-1">(scan thực tế: {settings.effective_ticker_count}/{settings.fiinquant_ticker_limit} mã do giới hạn FiinQuantX)</span>
-          )}
-        </p>
+        <p>Theo dõi: <b>{settings?.active_ticker_count ?? 33}</b> mã active</p>
+        {settings && settings.active_ticker_count > settings.fiinquant_ticker_limit && (
+          <p className="mt-1 text-orange-500">
+            M1/stream thực tế: {settings.effective_stream_ticker_count ?? settings.effective_ticker_count}/
+            {settings.fiinquant_stream_ticker_limit ?? settings.fiinquant_ticker_limit} mã
+            {settings.effective_daily_ticker_count && settings.effective_daily_ticker_count > (settings.effective_stream_ticker_count ?? settings.effective_ticker_count) && (
+              <span className="ml-1 text-gray-500">
+                | M3/daily: {settings.effective_daily_ticker_count} mã
+              </span>
+            )}
+          </p>
+        )}
         <p className="mt-1">Luồng: <b>{settings?.stream_status === 'connected' ? 'Kết nối' : 'Mất kết nối'}</b></p>
       </div>
     </div>

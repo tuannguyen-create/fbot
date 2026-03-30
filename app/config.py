@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     # FiinQuantX
     FIINQUANT_USERNAME: str = ""
     FIINQUANT_PASSWORD: str = ""
-    FIINQUANT_TICKER_LIMIT: int = 33  # max tickers per API call/stream (plan-dependent)
+    FIINQUANT_TICKER_LIMIT: int = 33  # general plan limit / legacy default
+    FIINQUANT_STREAM_TICKER_LIMIT: int | None = None  # concurrent live stream universe
+    FIINQUANT_INTRADAY_TICKER_LIMIT: int | None = None  # historical/live intraday universe
     FIINQUANT_INTRADAY_HISTORY_DAYS: int = 30  # provider intraday retention window in calendar days (plan-dependent)
 
     # Database
@@ -61,6 +63,14 @@ class Settings(BaseSettings):
     @property
     def IS_DEV(self) -> bool:
         return self.APP_ENV == "development"
+
+    @property
+    def EFFECTIVE_STREAM_TICKER_LIMIT(self) -> int:
+        return self.FIINQUANT_STREAM_TICKER_LIMIT or self.FIINQUANT_TICKER_LIMIT
+
+    @property
+    def EFFECTIVE_INTRADAY_TICKER_LIMIT(self) -> int:
+        return self.FIINQUANT_INTRADAY_TICKER_LIMIT or self.EFFECTIVE_STREAM_TICKER_LIMIT
 
 
 settings = Settings()
