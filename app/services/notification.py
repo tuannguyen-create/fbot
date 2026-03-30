@@ -642,10 +642,14 @@ async def send_m3_replay_digest(
     if len(repeated) > 5:
         repeat_lines.append(f"  … +{len(repeated) - 5} mã khác")
 
+    repeat_section = ""
+    if repeat_lines:
+        repeat_section = "🔁 Lặp nhiều:\n" + "\n".join(repeat_lines) + "\n"
+
     text = (
         f"<b>📈 M3 {label} {days} ngày</b>\n"
         f"Tạo mới: {created} cycle | Tổng candidates: {len(candidates)}\n"
-        + (f"🔁 Lặp nhiều:\n{'\n'.join(repeat_lines)}\n" if repeat_lines else "")
+        + repeat_section
         + ("Nổi bật:\n" + "\n".join(lines) if lines else "  (không có candidate)")
         + f"\n<i>Run: {run_id[:8]}</i>"
     )
