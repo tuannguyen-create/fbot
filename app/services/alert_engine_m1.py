@@ -479,7 +479,8 @@ def compute_m1_features(bar: dict, recent_bars: list[dict]) -> dict:
     close_pos        = round((c - lo) / (candle_range + eps) * 100, 1)
 
     # Strong bull: body ≥50%, close in upper third, green candle
-    strong_bull_candle = bool(body_pct >= 50.0 and close_pos >= 67.0 and c > o)
+    is_green_candle = bool(c > o)
+    strong_bull_candle = bool(body_pct >= 50.0 and close_pos >= 67.0 and is_green_candle)
 
     # Volume regime using recent bars (newest-first slices)
     vols_20 = [float(b.get("volume") or 0) for b in recent_bars[:20]]
@@ -521,38 +522,54 @@ def compute_m1_features(bar: dict, recent_bars: list[dict]) -> dict:
 
     # Composite score
     score = 0
+    candle_score = 0
+    base_score = 0
+    ma_score = 0
+    macd_score = 0
     reasons: list[str] = []
 
     if strong_bull_candle:
-        score += 30
-        reasons.append("nến tăng mạnh")
-    elif body_pct >= 40 and c > o:
-        score += 15
-        reasons.append("nến tăng vừa")
+        candle_score = 30
+        reasons.append("nến +30")
+    elif body_pct >= 40 and is_green_candle:
+        candle_score = 15
+        reasons.append("nến +15")
 
     if is_sideways_base:
-        score += 25
-        reasons.append("nền tích lũy")
+        base_score = 25
+        reasons.append("nền +25")
 
     if ma_stack_up:
-        score += 25
-        reasons.append("MA xếp chồng tăng")
+        ma_score = 25
+        reasons.append("MA +25")
     elif price_above_ma10:
-        score += 10
-        reasons.append("trên MA10")
+        ma_score = 10
+        reasons.append("MA +10")
 
     if macd_hist is not None and macd_hist > 0 and macd_hist_rising:
-        score += 20
-        reasons.append("MACD tăng")
+        macd_score = 20
+        reasons.append("MACD +20")
     elif macd_hist is not None and macd_hist > 0:
-        score += 10
-        reasons.append("MACD dương")
+        macd_score = 10
+        reasons.append("MACD +10")
+
+    score = candle_score + base_score + ma_score + macd_score
+    score_detail = (
+        f"Nến {candle_score}/30 • Nền {base_score}/25 • "
+        f"MA {ma_score}/25 • MACD {macd_score}/20"
+    )
+    quality_reason = (
+        f"{score_detail}. Tổng {min(score, 100)}/100."
+        if score > 0 else
+        "Nến 0/30 • Nền 0/25 • MA 0/25 • MACD 0/20. Tổng 0/100."
+    )
 
     return {
         "body_pct": body_pct,
         "upper_shadow_pct": upper_shadow_pct,
         "lower_shadow_pct": lower_shadow_pct,
         "close_pos": close_pos,
+        "is_green_candle": is_green_candle,
         "strong_bull_candle": strong_bull_candle,
         "avg_vol_20": int(avg_vol_20),
         "avg_vol_50": int(avg_vol_50),
@@ -564,8 +581,13 @@ def compute_m1_features(bar: dict, recent_bars: list[dict]) -> dict:
         "ma_stack_up": ma_stack_up,
         "macd_hist": macd_hist,
         "macd_hist_rising": macd_hist_rising,
+        "candle_score": candle_score,
+        "base_score": base_score,
+        "ma_score": ma_score,
+        "macd_score": macd_score,
         "quality_score": min(score, 100),
-        "quality_reason": ", ".join(reasons) if reasons else "không đủ tín hiệu",
+        "quality_reason": quality_reason,
+        "quality_tags": reasons,
     }
 
 

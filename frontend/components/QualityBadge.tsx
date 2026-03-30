@@ -1,6 +1,7 @@
 interface Props {
   grade: 'A' | 'B' | 'C' | null | undefined
   reason?: string | null
+  score?: number | null
 }
 
 const STYLES: Record<string, string> = {
@@ -9,13 +10,15 @@ const STYLES: Record<string, string> = {
   C: 'bg-gray-100 text-gray-500',
 }
 
-export function QualityBadge({ grade, reason }: Props) {
+export function QualityBadge({ grade, reason, score }: Props) {
   if (!grade) return null
   const style = STYLES[grade] ?? 'bg-gray-100 text-gray-500'
+  const gradeHint = grade === 'A' ? '70-100' : grade === 'B' ? '40-69' : '0-39'
+  const title = `${grade}: ${gradeHint} điểm${score != null ? ` • hiện tại ${score}/100` : ''}${reason ? ` • ${reason}` : ''}`
   return (
     <span
       className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold ${style}`}
-      title={reason ?? undefined}
+      title={title}
     >
       {grade}
     </span>

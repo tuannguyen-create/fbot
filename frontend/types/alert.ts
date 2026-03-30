@@ -19,6 +19,7 @@ export interface M1Features {
   upper_shadow_pct: number
   lower_shadow_pct: number
   close_pos: number
+  is_green_candle: boolean
   strong_bull_candle: boolean
   avg_vol_20: number
   avg_vol_50: number
@@ -30,8 +31,13 @@ export interface M1Features {
   ma_stack_up: boolean
   macd_hist: number | null
   macd_hist_rising: boolean | null
+  candle_score: number
+  base_score: number
+  ma_score: number
+  macd_score: number
   quality_score: number
   quality_reason: string
+  quality_tags: string[]
 }
 
 export interface AlertDetail extends AlertSummary {

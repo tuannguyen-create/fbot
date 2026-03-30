@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { alertsApi, healthApi } from '@/lib/api'
 import { AlertStatusBadge } from '@/components/AlertStatusBadge'
 import { QualityBadge } from '@/components/QualityBadge'
+import { M1QualityLegend } from '@/components/M1QualityLegend'
 import { OriginBadge } from '@/components/OriginBadge'
 import { M1Guide } from '@/components/ScannerGuide'
 import { formatDateTimeICT, formatVolume, formatRatio, formatPct, slotToTimeStr } from '@/lib/formatters'
@@ -116,6 +117,8 @@ function AlertsContent() {
         <p><b>Giờ thị trường</b> là phút đang được quét. <b>Chờ 15p</b> nghĩa là tín hiệu mới phát hiện, còn đợi xác nhận sau 15 phút.</p>
         <p className="mt-1"><b>Bên mua</b> = tỷ lệ khối lượng chủ động mua. <b>Chất lượng</b> = điểm A/B/C để ưu tiên xem trước, không phải lệnh mua tự động.</p>
       </div>
+
+      <M1QualityLegend />
 
       {/* Table */}
       {isLoading ? (

@@ -531,13 +531,18 @@ class TestComputeM1Features:
         bar = self._bar(open_=24800, high=25200, low=24780, close=25180)
         result = alert_engine_m1.compute_m1_features(bar, recent)
         assert result["quality_score"] >= 40  # at least strong_bull (30) + above_ma10 (10)
-        assert result["quality_reason"] != "không đủ tín hiệu"
+        assert "Tổng" in result["quality_reason"]
+        assert result["candle_score"] >= 15
 
     def test_quality_score_zero_for_bad_bar(self):
         bar = self._bar(open_=25100, high=25200, low=24900, close=24950)  # red candle
         result = alert_engine_m1.compute_m1_features(bar, [])
         assert result["quality_score"] == 0
-        assert result["quality_reason"] == "không đủ tín hiệu"
+        assert result["quality_reason"] == "Nến 0/30 • Nền 0/25 • MA 0/25 • MACD 0/20. Tổng 0/100."
+        assert result["candle_score"] == 0
+        assert result["base_score"] == 0
+        assert result["ma_score"] == 0
+        assert result["macd_score"] == 0
 
     def test_empty_recent_bars_safe(self):
         bar = self._bar()
@@ -545,6 +550,7 @@ class TestComputeM1Features:
         assert "quality_score" in result
         assert result["ma10"] is None
         assert result["ma20"] is None
+        assert "quality_tags" in result
 
 
 # ── TestCalcMacd ───────────────────────────────────────────────────────────

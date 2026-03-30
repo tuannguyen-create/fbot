@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { alertsApi } from '@/lib/api'
 import { AlertStatusBadge } from '@/components/AlertStatusBadge'
 import { QualityBadge } from '@/components/QualityBadge'
+import { M1QualityLegend } from '@/components/M1QualityLegend'
 import { OriginBadge } from '@/components/OriginBadge'
 import { formatAlertTime, formatDateTimeICT, formatVolume, formatRatio, formatPct, slotToTimeStr } from '@/lib/formatters'
 import Link from 'next/link'
@@ -103,7 +104,7 @@ export default function AlertDetailPage({ params }: Props) {
           <div className="mt-4 bg-gray-50 rounded-lg p-4 space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-sm font-semibold text-gray-700">Chất lượng M1</p>
-              <QualityBadge grade={alert.quality_grade} reason={alert.quality_reason} />
+              <QualityBadge grade={alert.quality_grade} score={alert.quality_score} reason={alert.quality_reason} />
             </div>
             <p className="text-xs text-gray-500">{alert.quality_reason}</p>
             <div className="w-full bg-gray-200 rounded-full h-1.5">
@@ -117,8 +118,27 @@ export default function AlertDetailPage({ params }: Props) {
             </div>
             <p className="text-xs text-right text-gray-400">{alert.quality_score}/100</p>
 
+            <div className="grid gap-2 md:grid-cols-2 text-xs">
+              <div className="rounded-lg bg-white border border-gray-200 p-3">
+                <p className="font-medium text-gray-900">Ngưỡng điểm</p>
+                <p className="mt-1 text-gray-600">A = 70-100, B = 40-69, C = 0-39</p>
+              </div>
+              {alert.features && (
+                <div className="rounded-lg bg-white border border-gray-200 p-3">
+                  <p className="font-medium text-gray-900">Breakdown điểm</p>
+                  <div className="mt-1 space-y-1 text-gray-600">
+                    <p>Nến: <b>{alert.features.candle_score}/30</b></p>
+                    <p>Nền: <b>{alert.features.base_score}/25</b></p>
+                    <p>MA: <b>{alert.features.ma_score}/25</b></p>
+                    <p>MACD: <b>{alert.features.macd_score}/20</b></p>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {alert.features && (
               <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs text-gray-600 pt-1 border-t border-gray-200">
+                <div>Nến xanh: <span className="font-medium">{alert.features.is_green_candle ? 'Có' : 'Không'}</span></div>
                 <div>Thân nến: <span className="font-medium">{alert.features.body_pct}%</span></div>
                 <div>Bóng trên: <span className="font-medium">{alert.features.upper_shadow_pct}%</span></div>
                 <div>Vị trí đóng cửa: <span className="font-medium">{alert.features.close_pos}%</span></div>
@@ -182,6 +202,8 @@ export default function AlertDetailPage({ params }: Props) {
           </div>
         )}
       </div>
+
+      <M1QualityLegend />
     </div>
   )
 }
