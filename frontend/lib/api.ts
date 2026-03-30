@@ -1,4 +1,4 @@
-import type { AlertDetail, AlertListParams, AlertSummary, AlertTodaySummary } from '@/types/alert'
+import type { AlertDetail, AlertListParams, AlertRepeatSummary, AlertSummary, AlertTodaySummary } from '@/types/alert'
 import type { CycleCandidate, CycleDetail, CycleRepeatSummary, CycleSummary } from '@/types/cycle'
 import type { AppSettings, HealthStatus, WatchlistItem } from '@/types/api'
 import type { NotificationReviewData } from '@/types/notification'
@@ -44,6 +44,10 @@ export const alertsApi = {
     ),
   get: (id: number) => apiFetch<{ alert: AlertDetail }>(`/api/v1/alerts/${id}`),
   summaryToday: () => apiFetch<AlertTodaySummary>(`/api/v1/alerts/summary/today`),
+  repeats: (params?: { days?: number; min_count?: number; ticker?: string; status?: string; origin?: string; limit?: number }) =>
+    apiFetch<{ days: number; min_count: number; total_tickers: number; items: AlertRepeatSummary[] }>(
+      `/api/v1/alerts/repeats${buildQuery(params as Record<string, unknown>)}`
+    ),
 }
 
 // ---- Cycles ----

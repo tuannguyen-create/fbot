@@ -78,6 +78,87 @@ async def list_alerts(
     return {"success": True, "data": {"alerts": alerts, "total": total, "limit": limit, "offset": offset}}
 
 
+@router.get("/repeats")
+async def repeated_alerts(
+    days: int = Query(default=5, ge=1, le=60),
+    min_count: int = Query(default=2, ge=2, le=50),
+    ticker: Optional[str] = None,
+    status: Optional[str] = None,
+    origin: Optional[str] = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    pool: asyncpg.Pool = Depends(get_db),
+):
+    conditions = [
+        "(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')::date >= ((NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh')::date - ($1::int - 1))"
+    ]
+    params: list[object] = [days]
+    idx = 2
+
+    if ticker:
+        conditions.append(f"ticker = ${idx}")
+        params.append(ticker.upper())
+        idx += 1
+    if status:
+        if status == "active":
+            conditions.append("status IN ('fired', 'confirmed')")
+        else:
+            conditions.append(f"status = ${idx}")
+            params.append(status)
+            idx += 1
+    if origin:
+        conditions.append(f"origin = ${idx}")
+        params.append(origin)
+        idx += 1
+
+    where = " AND ".join(conditions)
+    params.extend([min_count, limit])
+    min_idx = idx
+    limit_idx = idx + 1
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            WITH grouped AS (
+                SELECT
+                    ticker,
+                    COUNT(*) AS total_alerts,
+                    COUNT(*) FILTER (WHERE status='confirmed') AS confirmed_count,
+                    COUNT(*) FILTER (WHERE status='fired') AS fired_count,
+                    COUNT(*) FILTER (WHERE status='cancelled') AS cancelled_count,
+                    COUNT(*) FILTER (WHERE status='expired') AS expired_count,
+                    MAX(bar_time) AS latest_bar_time,
+                    MAX(ratio_5d) AS max_ratio_5d,
+                    ROUND(AVG(ratio_5d)::numeric, 2) AS avg_ratio_5d
+                FROM volume_alerts
+                WHERE {where}
+                GROUP BY ticker
+                HAVING COUNT(*) >= ${min_idx}
+            )
+            SELECT *,
+                   COUNT(*) OVER() AS total_tickers
+            FROM grouped
+            ORDER BY total_alerts DESC, max_ratio_5d DESC NULLS LAST, latest_bar_time DESC
+            LIMIT ${limit_idx}
+            """,
+            *params,
+        )
+
+    items = [_row_to_dict(r) for r in rows]
+    total_tickers = items[0]["total_tickers"] if items else 0
+    for item in items:
+        item.pop("total_tickers", None)
+
+    return {
+        "success": True,
+        "data": {
+            "days": days,
+            "min_count": min_count,
+            "total_tickers": total_tickers,
+            "items": items,
+        },
+    }
+
+
 @router.get("/summary/today")
 async def today_summary(pool: asyncpg.Pool = Depends(get_db)):
     # Only count live alerts for today's KPIs — historical replays must not inflate numbers

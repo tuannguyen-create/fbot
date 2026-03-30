@@ -30,6 +30,8 @@ function AlertsContent() {
   const status = params.get('status') ?? 'active'
   const magicOnly = params.get('magic_only') === 'true'
   const origin = (params.get('origin') ?? '') as 'live' | 'historical_replay' | 'recovery_replay' | ''
+  const repeatDays = Number(params.get('repeat_days') ?? 5)
+  const repeatMin = Number(params.get('repeat_min') ?? 2)
   const offset = Number(params.get('offset') ?? 0)
 
   const { data, isLoading, error } = useQuery({
@@ -49,8 +51,22 @@ function AlertsContent() {
     queryFn: () => healthApi.check(),
     refetchInterval: 30_000,
   })
+  const { data: repeatsData, isLoading: repeatsLoading } = useQuery({
+    queryKey: ['alerts', 'repeats', { ticker, status, origin, repeatDays, repeatMin }],
+    queryFn: () => alertsApi.repeats({
+      ticker: ticker || undefined,
+      status: status || undefined,
+      origin: origin || undefined,
+      days: repeatDays,
+      min_count: repeatMin,
+      limit: 20,
+    }),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  })
 
   const alerts = data?.alerts ?? []
+  const repeated = repeatsData?.items ?? []
   const total = data?.total ?? 0
   const totalPages = Math.ceil(total / LIMIT)
   const currentPage = Math.floor(offset / LIMIT) + 1
@@ -111,9 +127,93 @@ function AlertsContent() {
           <option value="historical_replay">Lịch sử</option>
           <option value="recovery_replay">Phục hồi</option>
         </select>
+        <select
+          value={String(repeatDays)}
+          onChange={(e) => updateFilter('repeat_days', e.target.value)}
+          className="border border-gray-300 rounded px-2 py-1 text-sm"
+        >
+          <option value="1">Lặp trong 1 ngày</option>
+          <option value="5">Lặp trong 5 ngày</option>
+          <option value="10">Lặp trong 10 ngày</option>
+          <option value="25">Lặp trong 25 ngày</option>
+        </select>
+        <select
+          value={String(repeatMin)}
+          onChange={(e) => updateFilter('repeat_min', e.target.value)}
+          className="border border-gray-300 rounded px-2 py-1 text-sm"
+        >
+          <option value="2">Lặp từ 2 lần</option>
+          <option value="3">Lặp từ 3 lần</option>
+          <option value="5">Lặp từ 5 lần</option>
+          <option value="10">Lặp từ 10 lần</option>
+        </select>
         <span className="text-xs text-gray-400 ml-auto">
           {total} kết quả
         </span>
+      </div>
+
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-800">Mã M1 lặp nhiều</h2>
+            <p className="text-xs text-gray-400">
+              Cửa sổ {repeatDays} ngày, tối thiểu {repeatMin} lần. Phần này dùng cùng bộ lọc nguồn, trạng thái và mã ở trên.
+            </p>
+          </div>
+          <span className="text-xs text-gray-400">
+            {repeatsLoading ? 'Đang tính…' : `${repeatsData?.total_tickers ?? 0} mã lặp`}
+          </span>
+        </div>
+
+        {repeatsLoading ? (
+          <div className="text-sm text-gray-400 mt-3">Đang tính tần suất M1...</div>
+        ) : repeated.length === 0 ? (
+          <div className="text-sm text-gray-400 mt-3">Không có mã nào lặp đủ ngưỡng trong cửa sổ này.</div>
+        ) : (
+          <div className="mt-3 space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {repeated.slice(0, 8).map((item) => (
+                <button
+                  key={item.ticker}
+                  onClick={() => updateFilter('ticker', item.ticker)}
+                  className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs text-amber-800"
+                >
+                  {item.ticker}: {item.total_alerts} lần
+                </button>
+              ))}
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {repeated.slice(0, 6).map((item) => (
+                <Link
+                  key={item.ticker}
+                  href={`/alerts?ticker=${item.ticker}&status=${status || ''}&origin=${origin || ''}&repeat_days=${repeatDays}&repeat_min=${repeatMin}`}
+                  className="rounded-lg border border-gray-200 px-4 py-3 hover:border-orange-300 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-gray-900">{item.ticker}</div>
+                      <div className="text-xs text-gray-400">
+                        Gần nhất: {formatDateTimeICT(item.latest_bar_time)}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-lg font-bold text-amber-700">{item.total_alerts} lần</div>
+                      <div className="text-xs text-gray-400">
+                        max {formatRatio(item.max_ratio_5d)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                    <span className="rounded bg-green-50 px-2 py-0.5 text-green-700">Xác nhận {item.confirmed_count}</span>
+                    <span className="rounded bg-orange-50 px-2 py-0.5 text-orange-700">Chờ {item.fired_count}</span>
+                    <span className="rounded bg-gray-100 px-2 py-0.5 text-gray-700">Huỷ {item.cancelled_count}</span>
+                    <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-700">Hết phiên {item.expired_count}</span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-600">
@@ -121,6 +221,7 @@ function AlertsContent() {
         <p className="mt-1"><b>Giờ thị trường</b> là phút đang được quét. <b>Chờ 15p</b> nghĩa là tín hiệu mới phát hiện, còn đợi xác nhận sau 15 phút.</p>
         <p className="mt-1"><b>Hết phiên</b> nghĩa là alert xuất hiện quá muộn nên không còn đủ 15 phút để xác nhận trong cùng phiên. App giữ lại để xem lại, nhưng không coi là tín hiệu đã xác nhận.</p>
         <p className="mt-1"><b>Bên mua</b> = tỷ lệ khối lượng chủ động mua. <b>Chất lượng</b> = điểm A/B/C để ưu tiên xem trước, không phải lệnh mua tự động.</p>
+        <p className="mt-1"><b>Mã M1 lặp nhiều</b> giúp nhìn ra mã bị kích hoạt volume abnormal lặp liên tục trong một cửa sổ ngắn. Đây là dấu hiệu để chú ý mã bị kéo mạnh hoặc bị bơm breakout nhiều nhịp.</p>
       </div>
 
       <M1QualityLegend />

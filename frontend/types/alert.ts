@@ -77,3 +77,15 @@ export interface AlertTodaySummary {
   expired: number
   by_ticker: Record<string, number>
 }
+
+export interface AlertRepeatSummary {
+  ticker: string
+  total_alerts: number
+  confirmed_count: number
+  fired_count: number
+  cancelled_count: number
+  expired_count: number
+  latest_bar_time: string
+  max_ratio_5d: number | null
+  avg_ratio_5d: number | null
+}
