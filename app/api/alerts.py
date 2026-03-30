@@ -79,7 +79,7 @@ async def list_alerts(
 async def today_summary(pool: asyncpg.Pool = Depends(get_db)):
     # Only count live alerts for today's KPIs — historical replays must not inflate numbers
     today_ict = (
-        "DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') = CURRENT_DATE AT TIME ZONE 'Asia/Ho_Chi_Minh'"
+        "DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') = (NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh')::date"
         " AND origin = 'live'"
     )
     async with pool.acquire() as conn:
@@ -87,6 +87,7 @@ async def today_summary(pool: asyncpg.Pool = Depends(get_db)):
         confirmed = await conn.fetchval(f"SELECT COUNT(*) FROM volume_alerts WHERE {today_ict} AND status='confirmed'")
         fired = await conn.fetchval(f"SELECT COUNT(*) FROM volume_alerts WHERE {today_ict} AND status='fired'")
         cancelled = await conn.fetchval(f"SELECT COUNT(*) FROM volume_alerts WHERE {today_ict} AND status='cancelled'")
+        expired = await conn.fetchval(f"SELECT COUNT(*) FROM volume_alerts WHERE {today_ict} AND status='expired'")
         ticker_rows = await conn.fetch(
             f"SELECT ticker, COUNT(*) as cnt FROM volume_alerts WHERE {today_ict} GROUP BY ticker"
         )
@@ -99,6 +100,7 @@ async def today_summary(pool: asyncpg.Pool = Depends(get_db)):
             "confirmed": confirmed or 0,
             "fired": fired or 0,
             "cancelled": cancelled or 0,
+            "expired": expired or 0,
             "by_ticker": by_ticker,
         },
     }

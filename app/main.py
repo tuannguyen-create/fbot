@@ -149,6 +149,10 @@ async def lifespan(app: FastAPI):
     historical_intraday_service.inject_deps(pool)
     universe_service.inject_deps(pool)
 
+    # Clean up live M1 alerts that were left in `fired` by a previous session
+    # (restart, end-of-day, or missing downstream bars).
+    await alert_engine_m1.expire_stale_fired_alerts()
+
     # 6. Warm in-memory baseline cache + first-run backfill
     await baseline_service.warm_cache()
     needs_backfill = await baseline_service.check_first_run_backfill()

@@ -89,7 +89,11 @@ export default function AlertDetailPage({ params }: Props) {
           <div className="bg-gray-50 rounded p-3">
             <p className="text-xs text-gray-400 uppercase mb-1">Tỷ lệ 15 phút</p>
             <p className="font-semibold">
-              {alert.ratio_15m ? formatRatio(alert.ratio_15m) : 'Chờ...'}
+              {alert.status === 'expired'
+                ? 'Hết phiên, không đủ 15p'
+                : alert.ratio_15m != null
+                  ? formatRatio(alert.ratio_15m)
+                  : 'Chờ...'}
               {alert.confirmed_at && (
                 <span className="ml-1 text-xs text-gray-400">
                   ({alert.origin === 'live' ? '' : 'phiên GD '}

@@ -90,6 +90,7 @@ function AlertsContent() {
           <option value="fired">Chờ xác nhận</option>
           <option value="confirmed">Xác nhận</option>
           <option value="cancelled">Huỷ</option>
+          <option value="expired">Hết phiên</option>
         </select>
         <label className="flex items-center gap-1.5 text-sm text-gray-600">
           <input
@@ -116,6 +117,7 @@ function AlertsContent() {
 
       <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-600">
         <p><b>Giờ thị trường</b> là phút đang được quét. <b>Chờ 15p</b> nghĩa là tín hiệu mới phát hiện, còn đợi xác nhận sau 15 phút.</p>
+        <p className="mt-1"><b>Hết phiên</b> nghĩa là alert xuất hiện quá muộn nên không còn đủ 15 phút để xác nhận trong cùng phiên. App giữ lại để xem lại, nhưng không coi là tín hiệu đã xác nhận.</p>
         <p className="mt-1"><b>Bên mua</b> = tỷ lệ khối lượng chủ động mua. <b>Chất lượng</b> = điểm A/B/C để ưu tiên xem trước, không phải lệnh mua tự động.</p>
       </div>
 
@@ -167,9 +169,9 @@ function AlertsContent() {
                   </th>
                   <th className="text-center px-4 py-2 text-xs font-medium text-gray-500 uppercase">
                     <span className="inline-flex items-center gap-1">
-                      Trạng thái
+                        Trạng thái
                       <InfoTooltip title="Trạng thái">
-                        Chờ 15p = vừa phát hiện, còn đợi lực duy trì sau 15 phút. Xác nhận 15p = lực còn khỏe. Không xác nhận = spike hụt lực.
+                        Chờ 15p = vừa phát hiện, còn đợi lực duy trì sau 15 phút. Xác nhận 15p = lực còn khỏe. Không xác nhận = spike hụt lực. Hết phiên = alert đến quá muộn nên không còn đủ 15 phút để xác nhận.
                       </InfoTooltip>
                     </span>
                   </th>

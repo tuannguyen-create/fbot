@@ -20,6 +20,9 @@ _redis = None
 # SSE broadcast queue — injected from stream module
 _alert_queue: Optional[asyncio.Queue] = None
 
+_LAST_TRADING_SLOT = 239
+_LAST_CONFIRMABLE_SLOT = _LAST_TRADING_SLOT - 15
+
 
 def inject_deps(pool, redis, alert_queue: asyncio.Queue = None):
     global _pool, _redis, _alert_queue
@@ -30,8 +33,8 @@ def inject_deps(pool, redis, alert_queue: asyncio.Queue = None):
 
 
 # In-memory: pending 15-min confirmations
-# key = ticker, value = {alert_id, slot, confirm_by_slot}
-_pending_confirms: dict[str, dict] = {}
+# key = ticker, value = list[{alert_id, slot, confirm_by_slot, cumulative_volume, trade_date}]
+_pending_confirms: dict[str, list[dict]] = {}
 
 
 # ── Pure evaluation (no side effects) ─────────────────────────────────────
@@ -374,6 +377,9 @@ async def process(bar: dict, is_partial: bool = False):
         if slot is None:
             return
 
+        if not is_partial:
+            await _expire_crossday_pending(bar_time_ict.date())
+
         baseline = await baseline_service.get_baseline(ticker, slot)
         if baseline is None:
             return
@@ -617,6 +623,79 @@ async def _fetch_recent_bars(ticker: str, bar_time: datetime, n: int = 50) -> li
         return []
 
 
+async def expire_stale_fired_alerts() -> int:
+    """Mark old unresolved live alerts as expired.
+
+    These are alerts that stayed in status='fired' because the 15-minute
+    confirmation window could not complete, typically due to end-of-session,
+    restart, or missing downstream bars.
+    """
+    if _pool is None:
+        return 0
+
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            UPDATE volume_alerts
+            SET status='expired',
+                confirmed_at=COALESCE(confirmed_at, NOW())
+            WHERE origin='live'
+              AND status='fired'
+              AND confirmed_at IS NULL
+              AND (
+                    DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') < CURRENT_DATE
+                 OR bar_time < NOW() - INTERVAL '20 minutes'
+              )
+            RETURNING id
+            """
+        )
+    expired = len(rows)
+    if expired:
+        logger.info(f"M1 stale fired alerts expired: {expired}")
+    return expired
+
+
+async def _expire_crossday_pending(current_trade_date) -> None:
+    """Expire in-memory pending confirmations from older sessions."""
+    stale_alert_ids: list[int] = []
+    for ticker, pendings in list(_pending_confirms.items()):
+        keep = [p for p in pendings if p.get("trade_date") == current_trade_date]
+        stale = [p for p in pendings if p.get("trade_date") != current_trade_date]
+        stale_alert_ids.extend(p["alert_id"] for p in stale)
+        if keep:
+            _pending_confirms[ticker] = keep
+        else:
+            _pending_confirms.pop(ticker, None)
+
+    if not stale_alert_ids or _pool is None:
+        return
+
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE volume_alerts
+            SET status='expired',
+                confirmed_at=COALESCE(confirmed_at, NOW())
+            WHERE id = ANY($1::int[])
+              AND status='fired'
+            """,
+            stale_alert_ids,
+        )
+
+    if _alert_queue is not None:
+        for alert_id in stale_alert_ids:
+            await _alert_queue.put({
+                "type": "alert_status_update",
+                "data": {
+                    "id": alert_id,
+                    "status": "expired",
+                    "ratio_15m": None,
+                },
+            })
+
+    logger.info(f"M1 pending confirmations expired across session boundary: {len(stale_alert_ids)}")
+
+
 async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline: dict, in_magic: bool, bar_time: datetime = None):
     """Insert alert (with dedup) and trigger SSE + email."""
     bu = bar.get("bu", 0) or 0
@@ -640,6 +719,8 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
         "C"
     )
     quality_reason = features["quality_reason"]
+    initial_status = "expired" if slot > _LAST_CONFIRMABLE_SLOT else "fired"
+    trade_date = bar_time.date() if isinstance(bar_time, datetime) else None
 
     try:
         async with _pool.acquire() as conn:
@@ -650,8 +731,8 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
                      in_magic_window, status,
                      features, quality_score, quality_grade, quality_reason,
                      strong_bull_candle, is_sideways_base)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'fired',
-                        $10::jsonb, $11, $12, $13, $14, $15)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11::jsonb, $12, $13, $14, $15, $16)
                 ON CONFLICT (ticker, slot, (DATE(bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh')))
                 DO NOTHING
                 RETURNING id, fired_at
@@ -665,6 +746,7 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
                 round(bu_pct, 4) if bu_pct is not None else None,
                 foreign_net,
                 in_magic,
+                initial_status,
                 json.dumps(features),
                 quality_score,
                 quality_grade,
@@ -684,15 +766,20 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
         if _redis is not None:
             await _redis.setex(throttle_key, 1800, "1")
 
-        # Queue for 15-min confirmation
-        _pending_confirms[ticker] = {
-            "alert_id": alert_id,
-            "slot": slot,
-            "confirm_by_slot": slot + 15,
-            "cumulative_volume": bar["volume"],
-        }
+        if initial_status == "fired":
+            # Queue for 15-min confirmation
+            _pending_confirms.setdefault(ticker, []).append({
+                "alert_id": alert_id,
+                "slot": slot,
+                "confirm_by_slot": slot + 15,
+                "cumulative_volume": bar["volume"],
+                "trade_date": trade_date,
+            })
 
-        logger.info(f"M1 Alert fired: {ticker} slot={slot} ratio={ratio:.2f}x magic={in_magic}")
+        logger.info(
+            f"M1 Alert fired: {ticker} slot={slot} ratio={ratio:.2f}x "
+            f"magic={in_magic} status={initial_status}"
+        )
 
         # SSE push
         if _alert_queue is not None:
@@ -706,7 +793,7 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
                     "ratio_5d": round(ratio, 2),
                     "bu_pct": round(bu_pct, 1) if bu_pct is not None else None,
                     "in_magic_window": in_magic,
-                    "status": "fired",
+                    "status": initial_status,
                     "fired_at": fired_at.isoformat() if fired_at else None,
                     "quality_score": quality_score,
                     "quality_grade": quality_grade,
@@ -714,8 +801,11 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
                 },
             })
 
-        # Email notification (async, non-blocking)
-        asyncio.create_task(notification.send_volume_alert_email(alert_id))
+        # Email/Telegram notification only for actionable alerts.
+        # End-of-session alerts are still stored for analysis, but they do not
+        # have a full 15-minute confirmation window and should not spam users.
+        if initial_status == "fired":
+            asyncio.create_task(notification.send_volume_alert_email(alert_id))
 
         # Trigger M3 intraday breakout check (volume spike may = breakout day)
         from app.services import alert_engine_m3
@@ -727,60 +817,90 @@ async def _fire_alert(ticker: str, bar: dict, slot: int, ratio: float, baseline:
 
 async def _check_confirmations(ticker: str, bar: dict, current_slot: int):
     """Check if any pending 15-min confirm is due."""
-    pending = _pending_confirms.get(ticker)
-    if not pending:
+    pendings = _pending_confirms.get(ticker)
+    if not pendings:
         return
-    if current_slot < pending["confirm_by_slot"]:
-        if current_slot == pending["slot"]:
-            # This is the completed bar for the same minute that triggered the alert.
-            # The alert fired from a partial snapshot; replace partial volume with the
-            # full minute's volume so the confirm accumulator starts from the right base.
-            _pending_confirms[ticker]["cumulative_volume"] = bar["volume"]
-        else:
-            _pending_confirms[ticker]["cumulative_volume"] += bar["volume"]
-        return
+    bar_time_utc: datetime = bar["bar_time"]
+    if isinstance(bar_time_utc, str):
+        bar_time_utc = datetime.fromisoformat(bar_time_utc.replace("Z", "+00:00"))
+    current_trade_date = to_ict(bar_time_utc).date()
 
-    # 15 min elapsed — evaluate
-    alert_id = pending["alert_id"]
-    orig_slot = pending["slot"]
-    cumulative = pending["cumulative_volume"]
-    elapsed_slots = current_slot - orig_slot
+    remaining: list[dict] = []
+    for pending in pendings:
+        # Crossed into the next trading day before a full 15-minute window.
+        # Mark these as expired rather than leaving them stuck in `fired`.
+        if pending["trade_date"] != current_trade_date:
+            try:
+                async with _pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        UPDATE volume_alerts
+                        SET status='expired', confirmed_at=NOW()
+                        WHERE id=$1 AND status='fired'
+                        """,
+                        pending["alert_id"],
+                    )
+                if _alert_queue is not None:
+                    await _alert_queue.put({
+                        "type": "alert_status_update",
+                        "data": {"id": pending["alert_id"], "status": "expired", "ratio_15m": None},
+                    })
+            except Exception as e:
+                logger.error(f"M1 expire-crossday error: {e}")
+            continue
 
-    baseline = await baseline_service.get_baseline(ticker, orig_slot)
-    avg_5d = baseline.get("avg_5d", 0) if baseline else 0
-    expected_15m = avg_5d * elapsed_slots if avg_5d else 1
-    ratio_15m = cumulative / expected_15m if expected_15m > 0 else 0
+        if current_slot < pending["confirm_by_slot"]:
+            if current_slot == pending["slot"]:
+                # This is the completed bar for the same minute that triggered the alert.
+                pending["cumulative_volume"] = bar["volume"]
+            else:
+                pending["cumulative_volume"] += bar["volume"]
+            remaining.append(pending)
+            continue
 
-    status = "confirmed" if ratio_15m >= settings.THRESHOLD_CONFIRM_15M else "cancelled"
+        # 15 min elapsed — evaluate
+        alert_id = pending["alert_id"]
+        orig_slot = pending["slot"]
+        cumulative = pending["cumulative_volume"]
+        elapsed_slots = current_slot - orig_slot
 
-    try:
-        async with _pool.acquire() as conn:
-            await conn.execute(
-                """
-                UPDATE volume_alerts
-                SET status=$1, confirmed_at=NOW(), ratio_15m=$2
-                WHERE id=$3
-                """,
-                status,
-                round(ratio_15m, 4),
-                alert_id,
-            )
-        logger.info(f"M1 Confirm: {ticker} alert_id={alert_id} status={status} ratio_15m={ratio_15m:.2f}")
+        baseline = await baseline_service.get_baseline(ticker, orig_slot)
+        avg_5d = baseline.get("avg_5d", 0) if baseline else 0
+        expected_15m = avg_5d * elapsed_slots if avg_5d else 1
+        ratio_15m = cumulative / expected_15m if expected_15m > 0 else 0
 
-        # SSE push — update clients with new status
-        if _alert_queue is not None:
-            await _alert_queue.put({
-                "type": "alert_status_update",
-                "data": {
-                    "id": alert_id,
-                    "status": status,
-                    "ratio_15m": round(ratio_15m, 2),
-                },
-            })
+        status = "confirmed" if ratio_15m >= settings.THRESHOLD_CONFIRM_15M else "cancelled"
 
-        asyncio.create_task(notification.send_volume_alert_confirmation(alert_id))
-    except Exception as e:
-        logger.error(f"M1 confirm error: {e}")
+        try:
+            async with _pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE volume_alerts
+                    SET status=$1, confirmed_at=NOW(), ratio_15m=$2
+                    WHERE id=$3
+                    """,
+                    status,
+                    round(ratio_15m, 4),
+                    alert_id,
+                )
+            logger.info(f"M1 Confirm: {ticker} alert_id={alert_id} status={status} ratio_15m={ratio_15m:.2f}")
 
-    # Remove from pending
-    del _pending_confirms[ticker]
+            # SSE push — update clients with new status
+            if _alert_queue is not None:
+                await _alert_queue.put({
+                    "type": "alert_status_update",
+                    "data": {
+                        "id": alert_id,
+                        "status": status,
+                        "ratio_15m": round(ratio_15m, 2),
+                    },
+                })
+
+            asyncio.create_task(notification.send_volume_alert_confirmation(alert_id))
+        except Exception as e:
+            logger.error(f"M1 confirm error: {e}")
+
+    if remaining:
+        _pending_confirms[ticker] = remaining
+    else:
+        _pending_confirms.pop(ticker, None)

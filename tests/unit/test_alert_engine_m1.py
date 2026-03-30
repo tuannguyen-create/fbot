@@ -194,7 +194,7 @@ class TestConfirmation:
             await alert_engine_m1.process(bar)
 
         assert "HPG" in alert_engine_m1._pending_confirms
-        pending = alert_engine_m1._pending_confirms["HPG"]
+        pending = alert_engine_m1._pending_confirms["HPG"][0]
         assert pending["alert_id"] == 50
         # confirm_by_slot = slot + 15
         from app.utils.trading_hours import get_slot
@@ -211,12 +211,13 @@ class TestConfirmation:
         cumulative should be 200k, not 250k (partial 50k + completed 200k).
         """
         from datetime import timezone
-        alert_engine_m1._pending_confirms["HPG"] = {
+        alert_engine_m1._pending_confirms["HPG"] = [{
             "alert_id": 99,
             "slot": 15,
             "confirm_by_slot": 30,
             "cumulative_volume": 50_000,  # set by partial bar that triggered the alert
-        }
+            "trade_date": datetime(2026, 3, 18, 9, 15).date(),
+        }]
 
         bar = {
             "ticker": "HPG",
@@ -224,22 +225,22 @@ class TestConfirmation:
             "volume": 200_000,  # full minute volume
             "bu": 0, "sd": 0, "fb": 0, "fs": 0, "fn": 0,
         }
-
         await alert_engine_m1._check_confirmations("HPG", bar, current_slot=15)
 
         # Must have replaced, not added
-        assert alert_engine_m1._pending_confirms["HPG"]["cumulative_volume"] == 200_000
+        assert alert_engine_m1._pending_confirms["HPG"][0]["cumulative_volume"] == 200_000
 
     @pytest.mark.asyncio
     async def test_subsequent_minute_adds_normally(self):
         """Bar for slot=16 (after alert at slot=15) should ADD to cumulative."""
         from datetime import timezone
-        alert_engine_m1._pending_confirms["HPG"] = {
+        alert_engine_m1._pending_confirms["HPG"] = [{
             "alert_id": 99,
             "slot": 15,
             "confirm_by_slot": 30,
             "cumulative_volume": 200_000,  # already replaced by completed slot-15 bar
-        }
+            "trade_date": datetime(2026, 3, 18, 9, 15).date(),
+        }]
 
         bar = {
             "ticker": "HPG",
@@ -250,7 +251,7 @@ class TestConfirmation:
 
         await alert_engine_m1._check_confirmations("HPG", bar, current_slot=16)
 
-        assert alert_engine_m1._pending_confirms["HPG"]["cumulative_volume"] == 350_000
+        assert alert_engine_m1._pending_confirms["HPG"][0]["cumulative_volume"] == 350_000
 
     @pytest.mark.asyncio
     async def test_partial_bar_skips_confirm_accumulation(self, injected_m1, sample_bar):
@@ -258,12 +259,13 @@ class TestConfirmation:
         pool, conn, redis, queue = injected_m1
 
         # Seed a pending confirm
-        alert_engine_m1._pending_confirms["HPG"] = {
+        alert_engine_m1._pending_confirms["HPG"] = [{
             "alert_id": 77,
             "slot": 15,
             "confirm_by_slot": 30,
             "cumulative_volume": 100_000,
-        }
+            "trade_date": datetime(2026, 3, 18, 9, 15).date(),
+        }]
 
         bar = {**sample_bar, "volume": 999_999,
                "bar_time": datetime(2026, 3, 18, 2, 16, 0, tzinfo=timezone.utc)}
@@ -273,18 +275,19 @@ class TestConfirmation:
             await alert_engine_m1.process(bar, is_partial=True)
 
         # cumulative_volume must be untouched
-        assert alert_engine_m1._pending_confirms["HPG"]["cumulative_volume"] == 100_000
+        assert alert_engine_m1._pending_confirms["HPG"][0]["cumulative_volume"] == 100_000
 
     @pytest.mark.asyncio
     async def test_confirm_status_schedules_telegram_followup(self, injected_m1):
         """15-minute settlement should queue a Telegram follow-up."""
         pool, conn, redis, queue = injected_m1
-        alert_engine_m1._pending_confirms["HPG"] = {
+        alert_engine_m1._pending_confirms["HPG"] = [{
             "alert_id": 88,
             "slot": 15,
             "confirm_by_slot": 30,
             "cumulative_volume": 15_000_000,
-        }
+            "trade_date": datetime(2026, 3, 18, 9, 15).date(),
+        }]
         bar = {
             "ticker": "HPG",
             "bar_time": datetime(2026, 3, 18, 2, 30, 0, tzinfo=timezone.utc),
@@ -305,6 +308,84 @@ class TestConfirmation:
         scheduled = mock_create_task.call_args[0][0]
         assert asyncio.iscoroutine(scheduled)
         scheduled.close()
+
+    @pytest.mark.asyncio
+    async def test_late_session_alert_starts_expired(self, injected_m1, sample_bar):
+        pool, conn, redis, queue = injected_m1
+        late_bar = {
+            **sample_bar,
+            "volume": 2_500_000,
+            "bar_time": datetime(2026, 3, 18, 7, 25, 0, tzinfo=timezone.utc),  # 14:25 ICT → slot 235
+        }
+        conn.fetchrow = AsyncMock(return_value=_mock_alert_row(120))
+        redis.exists = AsyncMock(return_value=0)
+
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
+             patch("app.services.alert_engine_m1.notification") as mock_notif, \
+             patch("app.services.alert_engine_m3.check_intraday_breakout", new=AsyncMock()), \
+             patch("app.services.alert_engine_m1.asyncio.create_task") as mock_create_task:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 1_000_000})
+            mock_notif.send_volume_alert_email = AsyncMock()
+            await alert_engine_m1.process(late_bar)
+
+        call_args = conn.fetchrow.call_args[0]
+        assert call_args[10] == "expired"
+        assert "HPG" not in alert_engine_m1._pending_confirms
+        # Only intraday breakout task should be scheduled; email notification is skipped.
+        assert mock_create_task.call_count == 1
+        scheduled = mock_create_task.call_args[0][0]
+        assert asyncio.iscoroutine(scheduled)
+        scheduled.close()
+
+    @pytest.mark.asyncio
+    async def test_multiple_pending_same_ticker_settle_independently(self, injected_m1):
+        pool, conn, redis, queue = injected_m1
+        alert_engine_m1._pending_confirms["HPG"] = [
+            {
+                "alert_id": 201,
+                "slot": 100,
+                "confirm_by_slot": 115,
+                "cumulative_volume": 1_000_000,
+                "trade_date": datetime(2026, 3, 18, 10, 40).date(),
+            },
+            {
+                "alert_id": 202,
+                "slot": 108,
+                "confirm_by_slot": 123,
+                "cumulative_volume": 2_000_000,
+                "trade_date": datetime(2026, 3, 18, 10, 48).date(),
+            },
+        ]
+        conn.execute = AsyncMock()
+        bar = {
+            "ticker": "HPG",
+            "bar_time": datetime(2026, 3, 18, 2, 55, 0, tzinfo=timezone.utc),  # 09:55? placeholder slot passed below
+            "volume": 100_000,
+            "bu": 0, "sd": 0, "fb": 0, "fs": 0, "fn": 0,
+        }
+
+        with patch("app.services.alert_engine_m1.baseline_service") as mock_bs, \
+             patch("app.services.alert_engine_m1.notification") as mock_notif, \
+             patch("app.services.alert_engine_m1.asyncio.create_task") as mock_create_task:
+            mock_bs.get_baseline = AsyncMock(return_value={"avg_5d": 100_000})
+            mock_notif.send_volume_alert_confirmation = AsyncMock()
+            await alert_engine_m1._check_confirmations("HPG", bar, current_slot=115)
+
+        # alert 201 settled, alert 202 stays pending
+        assert conn.execute.await_count == 1
+        assert len(alert_engine_m1._pending_confirms["HPG"]) == 1
+        assert alert_engine_m1._pending_confirms["HPG"][0]["alert_id"] == 202
+        mock_create_task.assert_called_once()
+        scheduled = mock_create_task.call_args[0][0]
+        assert asyncio.iscoroutine(scheduled)
+        scheduled.close()
+
+    @pytest.mark.asyncio
+    async def test_expire_stale_fired_alerts_marks_old_rows(self, injected_m1):
+        pool, conn, redis, queue = injected_m1
+        conn.fetch = AsyncMock(return_value=[{"id": 1}, {"id": 2}])
+        expired = await alert_engine_m1.expire_stale_fired_alerts()
+        assert expired == 2
 
 
 # ── TestEvaluateBar ────────────────────────────────────────────────────────

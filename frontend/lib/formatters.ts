@@ -61,6 +61,7 @@ export function getStatusColor(status: AlertSummary['status']): string {
   switch (status) {
     case 'confirmed': return 'text-green-600 bg-green-100'
     case 'cancelled': return 'text-gray-500 bg-gray-100'
+    case 'expired': return 'text-slate-600 bg-slate-100'
     default: return 'text-orange-600 bg-orange-100'
   }
 }
@@ -69,6 +70,7 @@ export function getStatusLabel(status: AlertSummary['status']): string {
   switch (status) {
     case 'confirmed': return '✅ Xác nhận 15p'
     case 'cancelled': return '⚪ Không xác nhận'
+    case 'expired': return '🕓 Hết phiên'
     default: return '⏳ Chờ 15p'
   }
 }

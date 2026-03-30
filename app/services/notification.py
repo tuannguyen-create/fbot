@@ -99,7 +99,12 @@ def _render_volume_alert_html(alert: dict) -> str:
     bu_pct = f"{alert['bu_pct']:.1f}%" if alert["bu_pct"] is not None else "N/A"
     foreign_net_str = _format_number(alert["foreign_net"])
     magic_label = "✅ Đúng (Magic Window)" if alert["in_magic_window"] else "Không"
-    status_label = {"confirmed": "✅ Đã xác nhận (15 phút)", "cancelled": "❌ Không xác nhận", "fired": "⏳ Chờ xác nhận"}.get(alert["status"], alert["status"])
+    status_label = {
+        "confirmed": "✅ Đã xác nhận (15 phút)",
+        "cancelled": "❌ Không xác nhận",
+        "fired": "⏳ Chờ xác nhận",
+        "expired": "🕓 Hết phiên, không đủ 15 phút",
+    }.get(alert["status"], alert["status"])
 
     return f"""
 <!DOCTYPE html>
@@ -319,6 +324,8 @@ async def send_volume_alert_email(alert_id: int):
     if not row:
         return
     alert = dict(row)
+    if alert.get("status") == "expired":
+        return
     ticker = alert["ticker"]
     slot = alert["slot"]
     time_str = slot_to_time_str(slot)

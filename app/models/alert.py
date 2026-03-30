@@ -12,7 +12,7 @@ class AlertSummary(BaseModel):
     ratio_5d: Optional[float]
     bu_pct: Optional[float]
     in_magic_window: bool
-    status: str  # fired | confirmed | cancelled
+    status: str  # fired | confirmed | cancelled | expired
 
 
 class AlertDetail(AlertSummary):
@@ -39,4 +39,5 @@ class AlertTodaySummary(BaseModel):
     confirmed: int
     fired: int
     cancelled: int
+    expired: int
     by_ticker: dict[str, int]

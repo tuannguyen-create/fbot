@@ -8,7 +8,7 @@ export interface AlertSummary {
   ratio_5d: number | null
   bu_pct: number | null    // 0-100
   in_magic_window: boolean
-  status: 'fired' | 'confirmed' | 'cancelled'
+  status: 'fired' | 'confirmed' | 'cancelled' | 'expired'
   quality_grade: 'A' | 'B' | 'C' | null
   quality_score?: number | null
   quality_reason?: string | null
@@ -74,5 +74,6 @@ export interface AlertTodaySummary {
   confirmed: number
   fired: number
   cancelled: number
+  expired: number
   by_ticker: Record<string, number>
 }
