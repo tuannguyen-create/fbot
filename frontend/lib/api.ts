@@ -1,5 +1,5 @@
 import type { AlertDetail, AlertListParams, AlertSummary, AlertTodaySummary } from '@/types/alert'
-import type { CycleCandidate, CycleDetail, CycleSummary } from '@/types/cycle'
+import type { CycleCandidate, CycleDetail, CycleRepeatSummary, CycleSummary } from '@/types/cycle'
 import type { AppSettings, HealthStatus, WatchlistItem } from '@/types/api'
 import type { NotificationReviewData } from '@/types/notification'
 
@@ -53,7 +53,7 @@ export const cyclesApi = {
       `/api/v1/cycles${buildQuery(params as Record<string, unknown>)}`
     ),
   candidates: (params?: { days?: number; limit?: number }) =>
-    apiFetch<{ candidates: CycleCandidate[]; total: number; tickers_with_data: number; days_scanned: number }>(
+    apiFetch<{ candidates: CycleCandidate[]; total: number; tickers_with_data: number; repeat_summary: CycleRepeatSummary[]; days_scanned: number }>(
       `/api/v1/cycles/candidates${buildQuery(params as Record<string, unknown>)}`
     ),
   get: (id: number) => apiFetch<{ cycle: CycleDetail }>(`/api/v1/cycles/${id}`),

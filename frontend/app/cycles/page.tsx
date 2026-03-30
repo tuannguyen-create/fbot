@@ -32,6 +32,7 @@ export default function CyclesPage() {
     refetchInterval: 60_000,
   })
   const candidates = candidatesData?.candidates ?? []
+  const repeatSummary = candidatesData?.repeat_summary ?? []
 
   return (
     <div className="space-y-4 max-w-3xl mx-auto">
@@ -130,6 +131,24 @@ export default function CyclesPage() {
           </span>
         </div>
 
+        {repeatSummary.length > 0 && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+            <div className="text-sm font-semibold text-amber-900">
+              Mã breakout lặp nhiều trong {candidatesData?.days_scanned ?? 25} ngày
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+              {repeatSummary.slice(0, 8).map((item) => (
+                <span key={item.ticker} className="rounded-full border border-amber-200 bg-white px-2.5 py-1 text-amber-800">
+                  {item.ticker}: {item.count} lần
+                </span>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-amber-800">
+              Mã lặp nhiều lần thường là mã bị kéo breakout nhiều nhịp trong cùng cửa sổ, nên cần xem kỹ trước khi ưu tiên.
+            </p>
+          </div>
+        )}
+
         {candidatesLoading ? (
           <div className="text-center py-8 text-gray-400">Đang tải breakout gần đây...</div>
         ) : candidatesError ? (
@@ -158,6 +177,11 @@ export default function CyclesPage() {
                       </Link>
                     ) : (
                       <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded">Candidate</span>
+                    )}
+                    {c.ticker_breakout_count > 1 && (
+                      <span className="text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                        Lặp {c.ticker_breakout_count} lần / {candidatesData?.days_scanned ?? 25} ngày
+                      </span>
                     )}
                   </div>
                   <div className="text-right">

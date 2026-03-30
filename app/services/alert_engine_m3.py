@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, timedelta
 from statistics import mean
 from time import monotonic
@@ -627,12 +627,37 @@ async def scan_history(days: int = 25, use_cache: bool = True) -> dict:
                     "game_type": meta["game_type"],
                 })
 
-    candidates.sort(key=lambda x: (x["breakout_date"], x["vol_ratio"]), reverse=True)
+    repeat_counts = Counter(c["ticker"] for c in candidates)
+    for candidate in candidates:
+        candidate["ticker_breakout_count"] = repeat_counts[candidate["ticker"]]
+
+    repeat_summary = [
+        {
+            "ticker": ticker,
+            "count": count,
+            "latest_breakout_date": max(
+                c["breakout_date"] for c in candidates if c["ticker"] == ticker
+            ),
+        }
+        for ticker, count in repeat_counts.items()
+        if count > 1
+    ]
+    repeat_summary.sort(key=lambda x: (-x["count"], x["ticker"]))
+
+    candidates.sort(
+        key=lambda x: (
+            x["ticker_breakout_count"],
+            x["breakout_date"],
+            x["vol_ratio"],
+        ),
+        reverse=True,
+    )
     result = {
         "breakout_candidates": candidates,
         "total": len(candidates),
         "tickers_with_data": len(by_ticker),
         "tickers_no_data": [t for t in tickers if t not in by_ticker],
+        "repeat_summary": repeat_summary,
         "days_scanned": days,
         "thresholds": {
             "vol_mult": settings.BREAKOUT_VOL_MULT,

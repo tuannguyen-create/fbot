@@ -1,5 +1,6 @@
 """Notification service via Resend email and Telegram."""
 import asyncio
+from collections import Counter
 import html
 import logging
 import re
@@ -621,6 +622,7 @@ async def send_m3_replay_digest(
     """Telegram summary digest for M3 historical replay — never per-cycle."""
     mode_map = {"bootstrap": "BOOTSTRAP", "recovery": "KHÔI PHỤC", "manual": "THỦ CÔNG"}
     label = mode_map.get(mode, mode.upper())
+    repeat_counts = Counter(c["ticker"] for c in candidates)
 
     highlight = [c for c in candidates if c.get("created")] or candidates
     lines = []
@@ -632,10 +634,19 @@ async def send_m3_replay_digest(
     if len(highlight) > 5:
         lines.append(f"  … +{len(highlight) - 5} mã khác")
 
+    repeat_lines = []
+    repeated = [(ticker, count) for ticker, count in repeat_counts.items() if count > 1]
+    repeated.sort(key=lambda x: (-x[1], x[0]))
+    for ticker, count in repeated[:5]:
+        repeat_lines.append(f"  • {ticker}: {count} breakout / {days} ngày")
+    if len(repeated) > 5:
+        repeat_lines.append(f"  … +{len(repeated) - 5} mã khác")
+
     text = (
         f"<b>📈 M3 {label} {days} ngày</b>\n"
         f"Tạo mới: {created} cycle | Tổng candidates: {len(candidates)}\n"
-        + ("\n".join(lines) if lines else "  (không có candidate)")
+        + (f"🔁 Lặp nhiều:\n{'\n'.join(repeat_lines)}\n" if repeat_lines else "")
+        + ("Nổi bật:\n" + "\n".join(lines) if lines else "  (không có candidate)")
         + f"\n<i>Run: {run_id[:8]}</i>"
     )
     await _send_telegram(text, event_type="m3_replay_digest")

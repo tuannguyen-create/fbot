@@ -24,6 +24,7 @@ async def list_cycle_candidates(
             "candidates": candidates,
             "total": result["total"],
             "tickers_with_data": result["tickers_with_data"],
+            "repeat_summary": result.get("repeat_summary", []),
             "days_scanned": result["days_scanned"],
             "thresholds": result["thresholds"],
         },

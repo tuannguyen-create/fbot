@@ -50,4 +50,11 @@ export interface CycleCandidate {
   cycle_id: number | null
   cycle_phase: Phase | null
   game_type: string | null
+  ticker_breakout_count: number
+}
+
+export interface CycleRepeatSummary {
+  ticker: string
+  count: number
+  latest_breakout_date: string
 }
