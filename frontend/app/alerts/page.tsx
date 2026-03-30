@@ -2,10 +2,11 @@
 import { Suspense } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { alertsApi } from '@/lib/api'
+import { alertsApi, healthApi } from '@/lib/api'
 import { AlertStatusBadge } from '@/components/AlertStatusBadge'
 import { QualityBadge } from '@/components/QualityBadge'
 import { OriginBadge } from '@/components/OriginBadge'
+import { M1Guide } from '@/components/ScannerGuide'
 import { formatDateTimeICT, formatVolume, formatRatio, formatPct, slotToTimeStr } from '@/lib/formatters'
 import Link from 'next/link'
 
@@ -41,6 +42,12 @@ function AlertsContent() {
     }),
   })
 
+  const { data: health } = useQuery({
+    queryKey: ['health', 'alerts-page'],
+    queryFn: () => healthApi.check(),
+    refetchInterval: 30_000,
+  })
+
   const alerts = data?.alerts ?? []
   const total = data?.total ?? 0
   const totalPages = Math.ceil(total / LIMIT)
@@ -57,6 +64,11 @@ function AlertsContent() {
   return (
     <div className="space-y-4 max-w-5xl mx-auto">
       <h1 className="text-xl font-bold text-gray-900">Cảnh báo khối lượng</h1>
+
+      <M1Guide
+        activeTickers={health?.active_ticker_count}
+        effectiveTickers={health?.effective_intraday_ticker_count ?? health?.effective_ticker_count}
+      />
 
       {/* Filters */}
       <div className="bg-white rounded-lg border border-gray-200 p-3 flex flex-wrap gap-2 items-center">
@@ -100,6 +112,11 @@ function AlertsContent() {
         </span>
       </div>
 
+      <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-600">
+        <p><b>Giờ thị trường</b> là phút đang được quét. <b>Chờ 15p</b> nghĩa là tín hiệu mới phát hiện, còn đợi xác nhận sau 15 phút.</p>
+        <p className="mt-1"><b>Bên mua</b> = tỷ lệ khối lượng chủ động mua. <b>Chất lượng</b> = điểm A/B/C để ưu tiên xem trước, không phải lệnh mua tự động.</p>
+      </div>
+
       {/* Table */}
       {isLoading ? (
         <div className="text-center py-8 text-gray-400">Đang tải...</div>
@@ -118,11 +135,11 @@ function AlertsContent() {
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Mã</th>
-                  <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Thời gian</th>
+                  <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Giờ thị trường</th>
                   <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">Khối lượng</th>
-                  <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">Tỷ lệ</th>
-                  <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">BU%</th>
-                  <th className="text-center px-4 py-2 text-xs font-medium text-gray-500 uppercase">CL</th>
+                  <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">KL / cơ sở</th>
+                  <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">Bên mua</th>
+                  <th className="text-center px-4 py-2 text-xs font-medium text-gray-500 uppercase">Chất lượng</th>
                   <th className="text-center px-4 py-2 text-xs font-medium text-gray-500 uppercase">Trạng thái</th>
                 </tr>
               </thead>
@@ -136,7 +153,10 @@ function AlertsContent() {
                       </Link>
                       <OriginBadge origin={a.origin} className="ml-1.5" />
                     </td>
-                    <td className="px-4 py-2 text-gray-500">{formatDateTimeICT(a.bar_time ?? a.fired_at)}</td>
+                    <td className="px-4 py-2 text-gray-500">
+                      <div>{formatDateTimeICT(a.bar_time ?? a.fired_at)}</div>
+                      <div className="text-xs text-gray-400">{slotToTimeStr(a.slot)} giờ VN</div>
+                    </td>
                     <td className="px-4 py-2 text-right font-mono">{formatVolume(a.volume)}</td>
                     <td className="px-4 py-2 text-right font-semibold text-orange-600">{formatRatio(a.ratio_5d)}</td>
                     <td className="px-4 py-2 text-right text-gray-600">{formatPct(a.bu_pct)}</td>
@@ -160,6 +180,7 @@ function AlertsContent() {
                   <span>{slotToTimeStr(a.slot)}</span>
                   <span>KL: {formatVolume(a.volume)}</span>
                   <span className="text-orange-600 font-semibold">{formatRatio(a.ratio_5d)}</span>
+                  {a.bu_pct != null && <span>Mua: {formatPct(a.bu_pct)}</span>}
                 </div>
               </Link>
             ))}

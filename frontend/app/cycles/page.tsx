@@ -1,10 +1,11 @@
 'use client'
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { cyclesApi } from '@/lib/api'
+import { cyclesApi, healthApi } from '@/lib/api'
 import { CycleProgressBar } from '@/components/CycleProgressBar'
 import { PhaseBadge } from '@/components/PhaseBadge'
 import { OriginBadge } from '@/components/OriginBadge'
+import { M3Guide } from '@/components/ScannerGuide'
 import { formatDateICT, formatRatio, formatVolume } from '@/lib/formatters'
 import Link from 'next/link'
 
@@ -23,6 +24,11 @@ export default function CyclesPage() {
     queryFn: () => cyclesApi.candidates({ days: 25, limit: 50 }),
     refetchInterval: 5 * 60_000,
   })
+  const { data: health } = useQuery({
+    queryKey: ['health', 'cycles-page'],
+    queryFn: () => healthApi.check(),
+    refetchInterval: 60_000,
+  })
   const candidates = candidatesData?.candidates ?? []
 
   return (
@@ -40,6 +46,16 @@ export default function CyclesPage() {
           <option value="invalidated">Vô hiệu</option>
           <option value="">Tất cả</option>
         </select>
+      </div>
+
+      <M3Guide
+        activeTickers={health?.active_ticker_count}
+        coveredTickers={candidatesData?.tickers_with_data}
+      />
+
+      <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-600">
+        <p><b>Candidate</b> là breakout daily vừa quét ra. <b>Cycle</b> là mã đã được đưa vào luồng theo dõi nhiều ngày.</p>
+        <p className="mt-1"><b>Đang phân phối</b> = sau breakout. <b>Tạo đáy</b> = có dấu hiệu cạn cung, chuẩn bị vào cửa sổ quan sát.</p>
       </div>
 
       {isLoading ? (

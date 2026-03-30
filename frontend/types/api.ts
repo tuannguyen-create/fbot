@@ -31,6 +31,8 @@ export interface AppSettings {
   effective_intraday_ticker_count?: number
   fiinquant_intraday_ticker_limit?: number
   stream_status: 'connected' | 'disconnected'
+  telegram_configured?: boolean
+  email_configured?: boolean
 }
 
 export interface HealthStatus {
@@ -47,5 +49,7 @@ export interface HealthStatus {
   effective_intraday_ticker_count?: number
   fiinquant_intraday_ticker_limit?: number
   effective_daily_ticker_count?: number
+  telegram_configured?: boolean
+  email_configured?: boolean
   timestamp: string
 }

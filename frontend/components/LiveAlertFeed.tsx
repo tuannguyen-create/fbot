@@ -40,7 +40,7 @@ export function LiveAlertFeed() {
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-100 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-700">Cảnh báo thực tế</h3>
+        <h3 className="text-sm font-semibold text-gray-700">M1 đang báo trong phiên</h3>
         <span className="text-xs text-gray-400">{alerts.length} cảnh báo</span>
       </div>
       <div className="divide-y divide-gray-50 max-h-80 overflow-y-auto">
@@ -63,7 +63,7 @@ export function LiveAlertFeed() {
                 <span>{slotToTimeStr(alert.slot)}</span>
                 <span>KL: {formatVolume(alert.volume)}</span>
                 <span className="font-semibold text-orange-600">{formatRatio(alert.ratio_5d)}</span>
-                {alert.bu_pct != null && <span>BU: {formatPct(alert.bu_pct)}</span>}
+                {alert.bu_pct != null && <span>Mua: {formatPct(alert.bu_pct)}</span>}
               </div>
             </div>
             <div className="flex items-center gap-1">

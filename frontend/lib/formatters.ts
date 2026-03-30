@@ -67,8 +67,8 @@ export function getStatusColor(status: AlertSummary['status']): string {
 
 export function getStatusLabel(status: AlertSummary['status']): string {
   switch (status) {
-    case 'confirmed': return '✅ Xác nhận'
-    case 'cancelled': return '❌ Huỷ'
-    default: return '⏳ Chờ'
+    case 'confirmed': return '✅ Xác nhận 15p'
+    case 'cancelled': return '⚪ Không xác nhận'
+    default: return '⏳ Chờ 15p'
   }
 }

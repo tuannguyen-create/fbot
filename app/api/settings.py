@@ -29,6 +29,8 @@ async def get_settings(pool: asyncpg.Pool = Depends(get_db)):
     async with pool.acquire() as conn:
         db_cfg = await _get_db_settings(conn)
     active_tickers = await universe_service.get_active_tickers()
+    telegram_configured = bool(app_settings.TELEGRAM_BOT_TOKEN and app_settings.TELEGRAM_CHAT_IDS.strip())
+    email_configured = bool(app_settings.RESEND_API_KEY and app_settings.RESEND_TO.strip())
 
     return {
         "success": True,
@@ -48,6 +50,8 @@ async def get_settings(pool: asyncpg.Pool = Depends(get_db)):
             "effective_intraday_ticker_count": min(len(active_tickers), app_settings.EFFECTIVE_INTRADAY_TICKER_LIMIT),
             "effective_daily_ticker_count": len(active_tickers),
             "stream_status": stream_ingester.get_status(),
+            "telegram_configured": telegram_configured,
+            "email_configured": email_configured,
         },
     }
 

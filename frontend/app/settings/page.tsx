@@ -112,6 +112,16 @@ export default function SettingsPage() {
                 '❌ Lỗi kết nối'
               }
             />
+            <StatusRow
+              label="Telegram"
+              status={settings?.telegram_configured ? true : false}
+              statusLabel={settings?.telegram_configured ? '✅ Đã cấu hình' : '❌ Chưa cấu hình'}
+            />
+            <StatusRow
+              label="Email"
+              status={settings?.email_configured ? true : false}
+              statusLabel={settings?.email_configured ? '✅ Đã cấu hình' : '❌ Chưa cấu hình'}
+            />
           </div>
         ) : (
           <p className="text-sm text-gray-400">Đang kiểm tra...</p>
@@ -121,15 +131,16 @@ export default function SettingsPage() {
       {/* Info */}
       <div className="bg-gray-50 rounded-lg border border-gray-200 p-4 text-sm text-gray-500">
         <p>Theo dõi: <b>{settings?.active_ticker_count ?? 33}</b> mã active</p>
-        {settings && settings.active_ticker_count > settings.fiinquant_ticker_limit && (
-          <p className="mt-1 text-orange-500">
-            M1/stream thực tế: {settings.effective_stream_ticker_count ?? settings.effective_ticker_count}/
-            {settings.fiinquant_stream_ticker_limit ?? settings.fiinquant_ticker_limit} mã
-            {settings.effective_daily_ticker_count && settings.effective_daily_ticker_count > (settings.effective_stream_ticker_count ?? settings.effective_ticker_count) && (
-              <span className="ml-1 text-gray-500">
-                | M3/daily: {settings.effective_daily_ticker_count} mã
-              </span>
-            )}
+        <p className="mt-1 text-orange-500">
+          M1/stream thực tế: {settings?.effective_stream_ticker_count ?? settings?.effective_ticker_count}/
+          {settings?.fiinquant_stream_ticker_limit ?? settings?.fiinquant_ticker_limit} mã
+        </p>
+        <p className="mt-1 text-blue-500">
+          M3/daily thực tế: {settings?.effective_daily_ticker_count ?? settings?.active_ticker_count} mã
+        </p>
+        {!settings?.telegram_configured && (
+          <p className="mt-2 text-red-500">
+            Telegram chưa cấu hình, nên dù app có alert/cycle thì bot sẽ không bắn tin nhắn.
           </p>
         )}
         <p className="mt-1">Luồng: <b>{settings?.stream_status === 'connected' ? 'Kết nối' : 'Mất kết nối'}</b></p>

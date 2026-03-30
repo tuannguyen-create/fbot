@@ -267,6 +267,8 @@ async def health():
 
     stream_detail = stream_ingester.get_detailed_status()
     active_tickers = await universe_service.get_active_tickers()
+    telegram_configured = bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_IDS.strip())
+    email_configured = bool(settings.RESEND_API_KEY and settings.RESEND_TO.strip())
 
     return {
         "success": True,
@@ -284,6 +286,8 @@ async def health():
             "effective_intraday_ticker_count": min(len(active_tickers), settings.EFFECTIVE_INTRADAY_TICKER_LIMIT),
             "fiinquant_intraday_ticker_limit": settings.EFFECTIVE_INTRADAY_TICKER_LIMIT,
             "effective_daily_ticker_count": len(active_tickers),
+            "telegram_configured": telegram_configured,
+            "email_configured": email_configured,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         },
     }

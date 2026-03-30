@@ -6,6 +6,7 @@ import { LiveAlertFeed } from '@/components/LiveAlertFeed'
 import { VolumeHeatmap } from '@/components/VolumeHeatmap'
 import { CycleProgressBar } from '@/components/CycleProgressBar'
 import { PhaseBadge } from '@/components/PhaseBadge'
+import { M1Guide, M3Guide } from '@/components/ScannerGuide'
 import { formatDateICT, formatRatio } from '@/lib/formatters'
 import Link from 'next/link'
 
@@ -109,9 +110,20 @@ export default function DashboardPage() {
         />
       </div>
 
+      <div className="grid md:grid-cols-2 gap-3">
+        <M1Guide
+          activeTickers={health?.active_ticker_count}
+          effectiveTickers={health?.effective_intraday_ticker_count ?? health?.effective_ticker_count}
+        />
+        <M3Guide
+          activeTickers={health?.active_ticker_count}
+          coveredTickers={candidatesData?.tickers_with_data ?? health?.effective_daily_ticker_count}
+        />
+      </div>
+
       {/* Live feed */}
       <div>
-        <h2 className="text-sm font-semibold text-gray-700 mb-2">Cảnh báo trực tiếp</h2>
+        <h2 className="text-sm font-semibold text-gray-700 mb-2">Cảnh báo M1 trực tiếp</h2>
         <LiveAlertFeed />
       </div>
 
