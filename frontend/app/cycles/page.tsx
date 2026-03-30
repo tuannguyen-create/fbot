@@ -62,14 +62,30 @@ export default function CyclesPage() {
       <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-600">
         <p><b>Candidate</b> là breakout daily vừa quét ra. <b>Cycle</b> là mã đã được đưa vào luồng theo dõi nhiều ngày.</p>
         <p className="mt-1"><b>Đang phân phối</b> = sau breakout. <b>Tạo đáy</b> = có dấu hiệu cạn cung, chuẩn bị vào cửa sổ quan sát.</p>
+        <p className="mt-1"><b>Phần trên</b> là cycle đang active. <b>Phần dưới</b> là breakout mới quét ra gần đây. Hai phần này khác vai trò, nên một mã như <b>VHM</b> có thể đứng riêng ở trên dù danh sách breakout phía dưới có nhiều mã khác.</p>
+      </div>
+
+      <div className="pt-1">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-800">Cycle M3 đang active</h2>
+            <p className="text-xs text-gray-400">
+              Đây là các mã đã được materialize thành cycle để theo dõi nhiều ngày, không phải chỉ là breakout mới.
+            </p>
+          </div>
+          <span className="text-xs text-gray-400">
+            {isLoading ? 'Đang tải…' : `${cycles.length} cycle`}
+          </span>
+        </div>
       </div>
 
       {isLoading ? (
         <div className="text-center py-8 text-gray-400">Đang tải...</div>
       ) : cycles.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">
-          <p className="text-3xl mb-2">📊</p>
-          <p>Không có chu kỳ nào đang theo dõi</p>
+        <div className="text-center py-8 text-gray-400 border border-dashed border-gray-200 rounded-lg">
+          <p className="text-2xl mb-2">📊</p>
+          <p>Chưa có cycle nào đang active</p>
+          <p className="text-xs mt-1">Các breakout daily mới vẫn xuất hiện ở phần bên dưới.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -202,7 +218,7 @@ export default function CyclesPage() {
                         Đã tạo cycle →
                       </Link>
                     ) : (
-                      <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded">Candidate</span>
+                      <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded">Breakout mới</span>
                     )}
                     {c.ticker_breakout_count > 1 && (
                       <span className="text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
