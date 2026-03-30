@@ -100,7 +100,13 @@ async def get_cycle(cycle_id: int, pool: asyncpg.Pool = Depends(get_db)):
         if not row:
             raise HTTPException(status_code=404, detail=f"Cycle #{cycle_id} not found")
         breakout_email_sent = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM notification_log WHERE cycle_id=$1 AND status='sent')",
+            """
+            SELECT EXISTS(
+                SELECT 1
+                FROM notification_log
+                WHERE cycle_id=$1 AND channel='email' AND status='sent'
+            )
+            """,
             cycle_id,
         )
     cycle = dict(row)

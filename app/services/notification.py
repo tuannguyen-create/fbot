@@ -26,7 +26,11 @@ def inject_deps(pool):
         logger.warning("resend package not installed — emails disabled")
 
 
-async def _send_telegram(text: str) -> None:
+async def _send_telegram(
+    text: str,
+    alert_id: int | None = None,
+    cycle_id: int | None = None,
+) -> None:
     """Send HTML-formatted message to all configured Telegram chat IDs."""
     if not settings.TELEGRAM_BOT_TOKEN:
         return
@@ -40,14 +44,38 @@ async def _send_telegram(text: str) -> None:
     async with httpx.AsyncClient(timeout=10) as client:
         for chat_id in chat_ids:
             try:
-                await client.post(url, json={
+                response = await client.post(url, json={
                     "chat_id": chat_id,
                     "text": text,
                     "parse_mode": "HTML",
                     "disable_web_page_preview": True,
                 })
+                response.raise_for_status()
+                body = response.json()
+                message_id = str(body.get("result", {}).get("message_id", ""))
+                if _pool is not None:
+                    async with _pool.acquire() as conn:
+                        await conn.execute(
+                            """
+                            INSERT INTO notification_log (alert_id, cycle_id, channel, message_id, status)
+                            VALUES ($1, $2, 'telegram', $3, 'sent')
+                            """,
+                            alert_id,
+                            cycle_id,
+                            message_id,
+                        )
             except Exception as e:
                 logger.error(f"Telegram send failed → {chat_id}: {e}")
+                if _pool is not None:
+                    async with _pool.acquire() as conn:
+                        await conn.execute(
+                            """
+                            INSERT INTO notification_log (alert_id, cycle_id, channel, status)
+                            VALUES ($1, $2, 'telegram', 'failed')
+                            """,
+                            alert_id,
+                            cycle_id,
+                        )
 
 
 def _format_number(n: Optional[int]) -> str:
@@ -312,7 +340,7 @@ async def send_volume_alert_email(alert_id: int):
     )
     await asyncio.gather(
         _send_email(subject, html, alert_id=alert_id),
-        _send_telegram(tg_text),
+        _send_telegram(tg_text, alert_id=alert_id),
     )
 
 
@@ -343,7 +371,7 @@ async def send_volume_alert_confirmation(alert_id: int):
         f"📊 Tỷ lệ 15p: <b>{ratio_str}</b>\n"
         f"<a href='{app_link}'>Xem alert →</a>"
     )
-    await _send_telegram(text)
+    await _send_telegram(text, alert_id=alert_id)
 
 
 async def send_cycle_breakout_email(cycle_id: int):
@@ -376,7 +404,7 @@ async def send_cycle_breakout_email(cycle_id: int):
     )
     await asyncio.gather(
         _send_email(subject, html, cycle_id=cycle_id),
-        _send_telegram(tg_text),
+        _send_telegram(tg_text, cycle_id=cycle_id),
     )
 
 
@@ -402,7 +430,7 @@ async def send_cycle_10day_warning_email(cycle_id: int):
     )
     await asyncio.gather(
         _send_email(subject, html, cycle_id=cycle_id),
-        _send_telegram(tg_text),
+        _send_telegram(tg_text, cycle_id=cycle_id),
     )
 
 
@@ -426,7 +454,7 @@ async def send_cycle_bottom_email(cycle_id: int):
     )
     await asyncio.gather(
         _send_email(subject, html, cycle_id=cycle_id),
-        _send_telegram(tg_text),
+        _send_telegram(tg_text, cycle_id=cycle_id),
     )
 
 
