@@ -40,6 +40,9 @@ export default function DashboardPage() {
   const today = new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Ho_Chi_Minh' })
   const cycles = cyclesData?.cycles ?? []
   const candidates = candidatesData?.candidates ?? []
+  const tickersWithM1Today = Object.keys(todaySummary?.by_ticker ?? {}).length
+  const effectiveM1Universe = health?.effective_intraday_ticker_count ?? health?.effective_ticker_count
+  const todayRawAlerts = todaySummary?.total ?? 0
 
   return (
     <div className="space-y-4 max-w-4xl mx-auto">
@@ -73,15 +76,15 @@ export default function DashboardPage() {
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard
-          title="Alerts hôm nay"
-          value={todaySummary?.total ?? '—'}
-          subtitle="Tổng cảnh báo"
-          color={todaySummary?.total ? 'warning' : 'default'}
+          title="Mã có M1 hôm nay"
+          value={todaySummary ? `${tickersWithM1Today}/${effectiveM1Universe ?? '—'}` : '—'}
+          subtitle={todaySummary ? `${todayRawAlerts} alert thô trong ngày` : 'Số mã có ít nhất 1 alert'}
+          color={tickersWithM1Today ? 'warning' : 'default'}
         />
         <StatCard
-          title="Xác nhận"
-          value={todaySummary ? `${todaySummary.confirmed}/${todaySummary.total}` : '—'}
-          subtitle="Xác nhận 15 phút"
+          title="Xác nhận 15p"
+          value={todaySummary?.confirmed ?? '—'}
+          subtitle={todaySummary ? `${todaySummary.cancelled} huỷ | ${todaySummary.expired} hết phiên` : 'Xác nhận 15 phút'}
           color="success"
         />
         <StatCard
