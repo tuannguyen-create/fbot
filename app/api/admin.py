@@ -405,12 +405,8 @@ async def admin_backfill_intraday(
     Returns number of bars fetched and upserted.
     """
     from app.services import historical_intraday_service
-    total = await historical_intraday_service.backfill_intraday(days=days)
+    result = await historical_intraday_service.backfill_intraday(days=days, with_summary=True)
     return {
         "success": True,
-        "data": {
-            "bars_upserted": total,
-            "retention_days": settings.FIINQUANT_INTRADAY_HISTORY_DAYS,
-            "ticker_limit": settings.EFFECTIVE_INTRADAY_TICKER_LIMIT,
-        },
+        "data": result,
     }

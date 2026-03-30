@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from app.config import settings
-from app.services import baseline_service, universe_service
+from app.services import baseline_service, fiinquant_rest, universe_service
 
 logger = logging.getLogger(__name__)
 
@@ -241,10 +241,11 @@ async def check_needs_backfill() -> bool:
     return (covered or 0) < threshold
 
 
-async def backfill_intraday(days: int | None = None) -> int:
+async def backfill_intraday(days: int | None = None, with_summary: bool = False) -> int | dict:
     """Fetch and persist recent 1m OHLCV from FiinQuantX within plan retention window.
 
     Returns the total number of bars upserted (0 if plan doesn't allow 1m history).
+    If `with_summary=True`, returns coverage metrics for REST + SDK fallback.
 
     The effective window is clamped to FIINQUANT_INTRADAY_HISTORY_DAYS calendar
     days — the provider's retention limit. Requesting older data would fail even
@@ -307,14 +308,30 @@ async def backfill_intraday(days: int | None = None) -> int:
     )
     loop = asyncio.get_running_loop()
     total_count = 0
+    rest_ok = 0
+    rest_empty = 0
+    rest_failed = 0
+    sdk_fallback_tickers = 0
     for chunk_start, chunk_end_dt in date_chunks:
         for i in range(0, len(tickers), batch_size):
             batch = tickers[i:i + batch_size]
-            bars = await loop.run_in_executor(
+            rest_result = await loop.run_in_executor(
                 None,
-                lambda b=batch, s=chunk_start, e=chunk_end_dt: _fetch_1m_blocking(b, s, e),
+                lambda b=batch, s=chunk_start, e=chunk_end_dt: fiinquant_rest.fetch_intraday_bars_with_status_blocking(b, s, e),
             )
-            total_count += await _upsert_intraday(bars)
+            total_count += await _upsert_intraday(rest_result.bars)
+            rest_ok += len(rest_result.tickers_with_rows)
+            rest_empty += len(rest_result.empty_tickers)
+            rest_failed += len(rest_result.failed_tickers)
+
+            missing = rest_result.empty_tickers + rest_result.failed_tickers
+            if missing:
+                sdk_fallback_tickers += len(missing)
+                sdk_bars = await loop.run_in_executor(
+                    None,
+                    lambda b=missing, s=chunk_start, e=chunk_end_dt: _fetch_1m_blocking(b, s, e),
+                )
+                total_count += await _upsert_intraday(sdk_bars)
 
     if total_count > 0:
         await baseline_service.rebuild_all(force=True)
@@ -326,4 +343,16 @@ async def backfill_intraday(days: int | None = None) -> int:
             f"(batched by {batch_size}) / "
             f"{effective_cal_days} calendar days"
         )
+    if with_summary:
+        return {
+            "bars_upserted": total_count,
+            "retention_days": retention_days,
+            "ticker_limit": intraday_limit,
+            "total_tickers": len(tickers),
+            "date_chunks": len(date_chunks),
+            "rest_tickers_with_rows": rest_ok,
+            "rest_empty_tickers": rest_empty,
+            "rest_failed_tickers": rest_failed,
+            "sdk_fallback_tickers": sdk_fallback_tickers,
+        }
     return total_count

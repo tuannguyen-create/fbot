@@ -3,7 +3,7 @@ import pytest
 from datetime import datetime, date, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services import historical_intraday_service
+from app.services import fiinquant_rest, historical_intraday_service
 
 
 @pytest.fixture(autouse=True)
@@ -160,7 +160,10 @@ class TestBackfillIntraday:
         }
 
         with patch.object(
-            historical_intraday_service, "_fetch_1m_blocking", return_value=[fake_bar]
+            fiinquant_rest, "fetch_intraday_bars_with_status_blocking",
+            return_value=fiinquant_rest.IntradayRestFetchResult(
+                bars=[fake_bar], tickers_with_rows=["HPG"], empty_tickers=[], failed_tickers=[]
+            )
         ), patch("app.services.historical_intraday_service.baseline_service") as mock_bs:
             mock_bs.rebuild_all = AsyncMock()
             await historical_intraday_service.backfill_intraday(days=5)
@@ -171,7 +174,10 @@ class TestBackfillIntraday:
     async def test_no_rebuild_when_zero_bars_fetched(self, mock_pool):
         pool, conn = mock_pool
         with patch.object(
-            historical_intraday_service, "_fetch_1m_blocking", return_value=[]
+            fiinquant_rest, "fetch_intraday_bars_with_status_blocking",
+            return_value=fiinquant_rest.IntradayRestFetchResult(
+                bars=[], tickers_with_rows=[], empty_tickers=[], failed_tickers=[]
+            )
         ), patch("app.services.historical_intraday_service.baseline_service") as mock_bs:
             mock_bs.rebuild_all = AsyncMock()
             await historical_intraday_service.backfill_intraday(days=5)
@@ -195,7 +201,12 @@ class TestBackfillIntraday:
         with patch(
             "app.services.historical_intraday_service.universe_service.get_active_tickers",
             new=AsyncMock(return_value=tickers),
-        ), patch.object(historical_intraday_service, "_fetch_1m_blocking", side_effect=fake_fetch), \
+        ), patch.object(fiinquant_rest, "fetch_intraday_bars_with_status_blocking", side_effect=lambda batch, from_date, to_date: fiinquant_rest.IntradayRestFetchResult(
+                bars=fake_fetch(batch, from_date, to_date),
+                tickers_with_rows=list(batch),
+                empty_tickers=[],
+                failed_tickers=[],
+            )), \
              patch.object(historical_intraday_service, "_upsert_intraday", new=AsyncMock(side_effect=lambda bars: len(bars))), \
              patch("app.services.historical_intraday_service.baseline_service") as mock_bs, \
              patch("app.services.historical_intraday_service.asyncio.get_running_loop", return_value=fake_loop), \
@@ -226,7 +237,12 @@ class TestBackfillIntraday:
         with patch(
             "app.services.historical_intraday_service.universe_service.get_active_tickers",
             new=AsyncMock(return_value=tickers),
-        ), patch.object(historical_intraday_service, "_fetch_1m_blocking", side_effect=fake_fetch), \
+        ), patch.object(fiinquant_rest, "fetch_intraday_bars_with_status_blocking", side_effect=lambda batch, from_date, to_date: fiinquant_rest.IntradayRestFetchResult(
+                bars=fake_fetch(batch, from_date, to_date),
+                tickers_with_rows=list(batch),
+                empty_tickers=[],
+                failed_tickers=[],
+            )), \
              patch.object(historical_intraday_service, "_upsert_intraday", new=AsyncMock(side_effect=lambda bars: len(bars))), \
              patch("app.services.historical_intraday_service.baseline_service") as mock_bs, \
              patch("app.services.historical_intraday_service.asyncio.get_running_loop", return_value=fake_loop), \
@@ -240,3 +256,42 @@ class TestBackfillIntraday:
         assert len(calls) == 1
         assert [len(batch) for batch, _, _ in calls] == [100]
         mock_bs.rebuild_all.assert_awaited_once_with(force=True)
+
+    @pytest.mark.asyncio
+    async def test_sdk_fallback_only_for_rest_missing_tickers(self, mock_pool):
+        tickers = ["HPG", "VND", "MBS"]
+        fake_bar = {
+            "ticker": "HPG", "bar_time": datetime(2026, 3, 25, 2, 15, tzinfo=timezone.utc),
+            "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0,
+            "volume": 100_000, "bu": 0, "sd": 0, "fb": 0, "fs": 0, "fn": 0,
+        }
+        sdk_calls = []
+
+        def fake_sdk(batch, from_date, to_date):
+            sdk_calls.append(list(batch))
+            return []
+
+        async def fake_run_in_executor(_self, _executor, fn):
+            return fn()
+
+        fake_loop = type("FakeLoop", (), {"run_in_executor": fake_run_in_executor})()
+
+        with patch(
+            "app.services.historical_intraday_service.universe_service.get_active_tickers",
+            new=AsyncMock(return_value=tickers),
+        ), patch.object(fiinquant_rest, "fetch_intraday_bars_with_status_blocking", return_value=fiinquant_rest.IntradayRestFetchResult(
+                bars=[fake_bar],
+                tickers_with_rows=["HPG"],
+                empty_tickers=["VND"],
+                failed_tickers=["MBS"],
+            )), patch.object(historical_intraday_service, "_fetch_1m_blocking", side_effect=fake_sdk), \
+             patch.object(historical_intraday_service, "_upsert_intraday", new=AsyncMock(side_effect=lambda bars: len(bars))), \
+             patch("app.services.historical_intraday_service.baseline_service") as mock_bs, \
+             patch("app.services.historical_intraday_service.asyncio.get_running_loop", return_value=fake_loop):
+            mock_bs.rebuild_all = AsyncMock()
+            result = await historical_intraday_service.backfill_intraday(days=5, with_summary=True)
+
+        assert sdk_calls == [["VND", "MBS"]]
+        assert result["bars_upserted"] == 1
+        assert result["rest_tickers_with_rows"] == 1
+        assert result["sdk_fallback_tickers"] == 2

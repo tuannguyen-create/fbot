@@ -1,6 +1,6 @@
 """Unit tests for fiinquant_rest REST adapter."""
 import pytest
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -44,6 +44,23 @@ class TestParseRestBar:
         assert bar["ticker"] == "HPG"
 
 
+class TestParseRestIntradayBar:
+    def test_normal_bar(self):
+        bar = fiinquant_rest._parse_rest_intraday_bar(
+            "hpg",
+            {"t": "2026-03-27T09:15:00", "o": 100.0, "c": 101.0, "h": 102.0, "l": 99.0, "v": 5000.0},
+            {"t": "2026-03-27T09:15:00", "b": 3000.0, "s": 2000.0},
+            {"t": "2026-03-27T09:15:00", "fb": 500.0, "fs": 200.0, "fn": 300.0},
+        )
+        assert bar is not None
+        assert bar["ticker"] == "HPG"
+        assert bar["bar_time"] == datetime(2026, 3, 27, 2, 15, tzinfo=timezone.utc)
+        assert bar["volume"] == 5000
+        assert bar["bu"] == 3000
+        assert bar["sd"] == 2000
+        assert bar["fn"] == 300
+
+
 class TestFetchOneTicker:
     def test_success(self):
         mock_response = MagicMock()
@@ -79,7 +96,7 @@ class TestFetchOneTicker:
         mock_response.status_code = 403
         with patch("app.services.fiinquant_rest._requests.get", return_value=mock_response):
             status, bars = fiinquant_rest._fetch_one_ticker({}, "HPG", 25)
-        assert status == "failed"
+        assert status == "empty"
         assert len(bars) == 0
 
     def test_zero_volume_filtered(self):
@@ -94,6 +111,28 @@ class TestFetchOneTicker:
             status, bars = fiinquant_rest._fetch_one_ticker({}, "HPG", 25)
         assert status == "empty"
         assert len(bars) == 0
+
+
+class TestFetchOneIntradayTicker:
+    def test_success_merges_chart_and_indicators(self):
+        chart = MagicMock(status_code=200)
+        chart.json.return_value = {
+            "items": [{"t": "2026-03-27T09:15:00", "o": 100.0, "c": 101.0, "h": 102.0, "l": 99.0, "v": 5000.0}]
+        }
+        busd = MagicMock(status_code=200)
+        busd.json.return_value = {
+            "items": [{"t": "2026-03-27T09:15:00", "b": 3000.0, "s": 2000.0}]
+        }
+        foreign = MagicMock(status_code=200)
+        foreign.json.return_value = {
+            "items": [{"t": "2026-03-27T09:15:00", "fb": 500.0, "fs": 200.0, "fn": 300.0}]
+        }
+        with patch("app.services.fiinquant_rest._requests.get", side_effect=[chart, busd, foreign]):
+            status, bars = fiinquant_rest._fetch_one_intraday_ticker({}, "HPG", date(2026, 3, 23), date(2026, 3, 27), 2000)
+        assert status == "ok"
+        assert len(bars) == 1
+        assert bars[0]["bu"] == 3000
+        assert bars[0]["fn"] == 300
 
 
 class TestFetchDailyBarsBlocking:
@@ -155,6 +194,40 @@ class TestFetchDailyBarsBlocking:
         with patch.dict("sys.modules", {"FiinQuantX": fake_fq}), \
              patch("app.services.fiinquant_rest._requests.get", side_effect=fake_get):
             result = fiinquant_rest.fetch_daily_bars_with_status_blocking(tickers, days=25)
+
+        assert len(result.bars) == 1
+        assert result.tickers_with_rows == ["HPG"]
+        assert result.empty_tickers == ["VND"]
+        assert result.failed_tickers == ["MBS"]
+
+
+class TestFetchIntradayBarsBlocking:
+    def test_reports_partial_coverage(self):
+        tickers = ["HPG", "VND", "MBS"]
+
+        def fake_fetch(headers, ticker, from_date, to_date, page_size):
+            if ticker == "HPG":
+                return "ok", [{
+                    "ticker": "HPG",
+                    "bar_time": datetime(2026, 3, 27, 2, 15, tzinfo=timezone.utc),
+                    "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5,
+                    "volume": 5000, "bu": 3000, "sd": 2000, "fb": 0, "fs": 0, "fn": 0,
+                }]
+            if ticker == "VND":
+                return "empty", []
+            return "failed", []
+
+        fake_fq = SimpleNamespace(
+            FiinSession=lambda username, password: SimpleNamespace(
+                login=lambda: SimpleNamespace(access_token="fake-jwt")
+            )
+        )
+
+        with patch.dict("sys.modules", {"FiinQuantX": fake_fq}), \
+             patch("app.services.fiinquant_rest._fetch_one_intraday_ticker", side_effect=fake_fetch):
+            result = fiinquant_rest.fetch_intraday_bars_with_status_blocking(
+                tickers, date(2026, 3, 23), date(2026, 3, 27)
+            )
 
         assert len(result.bars) == 1
         assert result.tickers_with_rows == ["HPG"]
