@@ -10,6 +10,8 @@ export interface AlertSummary {
   in_magic_window: boolean
   status: 'fired' | 'confirmed' | 'cancelled'
   quality_grade: 'A' | 'B' | 'C' | null
+  quality_score?: number | null
+  quality_reason?: string | null
   origin: 'live' | 'historical_replay' | 'recovery_replay'
   is_actionable: boolean
 }

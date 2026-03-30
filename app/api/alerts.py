@@ -61,7 +61,7 @@ async def list_alerts(
         rows = await conn.fetch(
             f"""
             SELECT id, ticker, fired_at, bar_time, slot, volume, ratio_5d, bu_pct,
-                   in_magic_window, status, quality_grade, origin, is_actionable
+                   in_magic_window, status, quality_grade, quality_score, origin, is_actionable
             FROM volume_alerts {where}
             ORDER BY bar_time DESC
             LIMIT ${idx} OFFSET ${idx+1}

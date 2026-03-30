@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { alertsApi, healthApi } from '@/lib/api'
 import { AlertStatusBadge } from '@/components/AlertStatusBadge'
+import { InfoTooltip } from '@/components/InfoTooltip'
 import { QualityBadge } from '@/components/QualityBadge'
 import { M1QualityLegend } from '@/components/M1QualityLegend'
 import { OriginBadge } from '@/components/OriginBadge'
@@ -138,12 +139,40 @@ function AlertsContent() {
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Mã</th>
-                  <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Giờ thị trường</th>
+                  <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">
+                    <span className="inline-flex items-center gap-1">
+                      Giờ thị trường
+                      <InfoTooltip title="Giờ thị trường">
+                        Đây là phút giao dịch thực tế đang bị quét. Alert có thể được ghi sớm vài giây trong cùng phút do app chụp snapshot mỗi khoảng 15 giây.
+                      </InfoTooltip>
+                    </span>
+                  </th>
                   <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">Khối lượng</th>
                   <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">KL / cơ sở</th>
-                  <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">Bên mua</th>
-                  <th className="text-center px-4 py-2 text-xs font-medium text-gray-500 uppercase">Chất lượng</th>
-                  <th className="text-center px-4 py-2 text-xs font-medium text-gray-500 uppercase">Trạng thái</th>
+                  <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase">
+                    <span className="inline-flex items-center gap-1">
+                      Bên mua
+                      <InfoTooltip title="Bên mua">
+                        Tỷ lệ khối lượng chủ động mua trên tổng khối lượng chủ động mua+bán. Gần 100% là mua chủ động mạnh, gần 0% là bán chủ động mạnh.
+                      </InfoTooltip>
+                    </span>
+                  </th>
+                  <th className="text-center px-4 py-2 text-xs font-medium text-gray-500 uppercase">
+                    <span className="inline-flex items-center gap-1">
+                      Điểm M1
+                      <InfoTooltip title="Điểm M1">
+                        Không phải chỉ là nến. Điểm M1 = Nến tối đa 30 + Nền 25 + MA 25 + MACD 20. A = 70-100, B = 40-69, C = 0-39.
+                      </InfoTooltip>
+                    </span>
+                  </th>
+                  <th className="text-center px-4 py-2 text-xs font-medium text-gray-500 uppercase">
+                    <span className="inline-flex items-center gap-1">
+                      Trạng thái
+                      <InfoTooltip title="Trạng thái">
+                        Chờ 15p = vừa phát hiện, còn đợi lực duy trì sau 15 phút. Xác nhận 15p = lực còn khỏe. Không xác nhận = spike hụt lực.
+                      </InfoTooltip>
+                    </span>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -163,7 +192,7 @@ function AlertsContent() {
                     <td className="px-4 py-2 text-right font-mono">{formatVolume(a.volume)}</td>
                     <td className="px-4 py-2 text-right font-semibold text-orange-600">{formatRatio(a.ratio_5d)}</td>
                     <td className="px-4 py-2 text-right text-gray-600">{formatPct(a.bu_pct)}</td>
-                    <td className="px-4 py-2 text-center"><QualityBadge grade={a.quality_grade} /></td>
+                    <td className="px-4 py-2 text-center"><QualityBadge grade={a.quality_grade} score={a.quality_score} reason={a.quality_reason} /></td>
                     <td className="px-4 py-2 text-center"><AlertStatusBadge status={a.status} /></td>
                   </tr>
                 ))}

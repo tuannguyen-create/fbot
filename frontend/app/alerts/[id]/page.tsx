@@ -2,6 +2,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { alertsApi } from '@/lib/api'
 import { AlertStatusBadge } from '@/components/AlertStatusBadge'
+import { InfoTooltip } from '@/components/InfoTooltip'
 import { QualityBadge } from '@/components/QualityBadge'
 import { M1QualityLegend } from '@/components/M1QualityLegend'
 import { OriginBadge } from '@/components/OriginBadge'
@@ -103,7 +104,12 @@ export default function AlertDetailPage({ params }: Props) {
         {alert.quality_score != null && (
           <div className="mt-4 bg-gray-50 rounded-lg p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold text-gray-700">Chất lượng M1</p>
+              <p className="text-sm font-semibold text-gray-700 inline-flex items-center gap-1">
+                Điểm M1
+                <InfoTooltip title="Điểm M1">
+                  Đây là điểm tổng hợp 4 phần: Nến 30 + Nền 25 + MA 25 + MACD 20. Không nên hiểu A/B/C là chỉ nói về nến.
+                </InfoTooltip>
+              </p>
               <QualityBadge grade={alert.quality_grade} score={alert.quality_score} reason={alert.quality_reason} />
             </div>
             <p className="text-xs text-gray-500">{alert.quality_reason}</p>
