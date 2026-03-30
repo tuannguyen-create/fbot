@@ -1,6 +1,7 @@
 import type { AlertDetail, AlertListParams, AlertSummary, AlertTodaySummary } from '@/types/alert'
 import type { CycleCandidate, CycleDetail, CycleSummary } from '@/types/cycle'
 import type { AppSettings, HealthStatus, WatchlistItem } from '@/types/api'
+import type { NotificationReviewData } from '@/types/notification'
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
@@ -97,6 +98,12 @@ export const settingsApi = {
 // ---- Health ----
 export const healthApi = {
   check: () => apiFetch<HealthStatus>(`/api/v1/health`),
+}
+
+// ---- Notifications ----
+export const notificationsApi = {
+  review: (params?: { window?: 'today' | '7d' | '30d'; channel?: 'telegram' | 'email'; limit?: number }) =>
+    apiFetch<NotificationReviewData>(`/api/v1/notifications/review${buildQuery(params as Record<string, unknown>)}`),
 }
 
 // ---- SSE ----

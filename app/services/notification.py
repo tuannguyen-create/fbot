@@ -1,6 +1,8 @@
 """Notification service via Resend email and Telegram."""
 import asyncio
+import html
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -12,6 +14,42 @@ logger = logging.getLogger(__name__)
 
 _pool = None
 _resend = None
+
+
+def _preview_text(text: str) -> str:
+    """Strip HTML tags/entities so UI can render a readable one-line preview."""
+    plain = re.sub(r"<[^>]+>", "", text or "")
+    plain = html.unescape(plain)
+    return re.sub(r"\s+", " ", plain).strip()
+
+
+async def _log_notification(
+    *,
+    channel: str,
+    status: str,
+    alert_id: int | None = None,
+    cycle_id: int | None = None,
+    message_id: str | None = None,
+    event_type: str | None = None,
+    preview_text: str | None = None,
+) -> None:
+    if _pool is None:
+        return
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO notification_log
+                (alert_id, cycle_id, channel, message_id, status, event_type, preview_text)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """,
+            alert_id,
+            cycle_id,
+            channel,
+            message_id,
+            status,
+            event_type,
+            preview_text,
+        )
 
 
 def inject_deps(pool):
@@ -30,6 +68,7 @@ async def _send_telegram(
     text: str,
     alert_id: int | None = None,
     cycle_id: int | None = None,
+    event_type: str | None = None,
 ) -> None:
     """Send HTML-formatted message to all configured Telegram chat IDs."""
     if not settings.TELEGRAM_BOT_TOKEN:
@@ -53,29 +92,25 @@ async def _send_telegram(
                 response.raise_for_status()
                 body = response.json()
                 message_id = str(body.get("result", {}).get("message_id", ""))
-                if _pool is not None:
-                    async with _pool.acquire() as conn:
-                        await conn.execute(
-                            """
-                            INSERT INTO notification_log (alert_id, cycle_id, channel, message_id, status)
-                            VALUES ($1, $2, 'telegram', $3, 'sent')
-                            """,
-                            alert_id,
-                            cycle_id,
-                            message_id,
-                        )
+                await _log_notification(
+                    alert_id=alert_id,
+                    cycle_id=cycle_id,
+                    channel="telegram",
+                    message_id=message_id,
+                    status="sent",
+                    event_type=event_type,
+                    preview_text=_preview_text(text),
+                )
             except Exception as e:
                 logger.error(f"Telegram send failed → {chat_id}: {e}")
-                if _pool is not None:
-                    async with _pool.acquire() as conn:
-                        await conn.execute(
-                            """
-                            INSERT INTO notification_log (alert_id, cycle_id, channel, status)
-                            VALUES ($1, $2, 'telegram', 'failed')
-                            """,
-                            alert_id,
-                            cycle_id,
-                        )
+                await _log_notification(
+                    alert_id=alert_id,
+                    cycle_id=cycle_id,
+                    channel="telegram",
+                    status="failed",
+                    event_type=event_type,
+                    preview_text=_preview_text(text),
+                )
 
 
 def _format_number(n: Optional[int]) -> str:
@@ -269,7 +304,14 @@ def _render_cycle_bottom_html(cycle: dict) -> str:
 """
 
 
-async def _send_email(subject: str, html: str, alert_id: int = None, cycle_id: int = None):
+async def _send_email(
+    subject: str,
+    html: str,
+    alert_id: int = None,
+    cycle_id: int = None,
+    event_type: str | None = None,
+    preview_text: str | None = None,
+):
     if _resend is None:
         logger.warning(f"Email skipped (Resend not configured): {subject}")
         return None
@@ -288,17 +330,17 @@ async def _send_email(subject: str, html: str, alert_id: int = None, cycle_id: i
         message_id = result.get("id")
 
         # Log to DB
-        async with _pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO notification_log (alert_id, cycle_id, channel, message_id, status)
-                VALUES ($1, $2, 'email', $3, 'sent')
-                """,
-                alert_id,
-                cycle_id,
-                message_id,
-            )
-            if alert_id:
+        await _log_notification(
+            alert_id=alert_id,
+            cycle_id=cycle_id,
+            channel="email",
+            message_id=message_id,
+            status="sent",
+            event_type=event_type,
+            preview_text=preview_text or subject,
+        )
+        if alert_id:
+            async with _pool.acquire() as conn:
                 await conn.execute(
                     "UPDATE volume_alerts SET email_sent=TRUE WHERE id=$1", alert_id
                 )
@@ -306,15 +348,14 @@ async def _send_email(subject: str, html: str, alert_id: int = None, cycle_id: i
         return message_id
     except Exception as e:
         logger.error(f"Resend failed: {e}")
-        async with _pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO notification_log (alert_id, cycle_id, channel, status)
-                VALUES ($1, $2, 'email', 'failed')
-                """,
-                alert_id,
-                cycle_id,
-            )
+        await _log_notification(
+            alert_id=alert_id,
+            cycle_id=cycle_id,
+            channel="email",
+            status="failed",
+            event_type=event_type,
+            preview_text=preview_text or subject,
+        )
         return None
 
 
@@ -346,8 +387,14 @@ async def send_volume_alert_email(alert_id: int):
         f"<a href='{app_link}'>Xem alert →</a>"
     )
     await asyncio.gather(
-        _send_email(subject, html, alert_id=alert_id),
-        _send_telegram(tg_text, alert_id=alert_id),
+        _send_email(
+            subject,
+            html,
+            alert_id=alert_id,
+            event_type="m1_alert_fired",
+            preview_text=_preview_text(tg_text),
+        ),
+        _send_telegram(tg_text, alert_id=alert_id, event_type="m1_alert_fired"),
     )
 
 
@@ -378,7 +425,7 @@ async def send_volume_alert_confirmation(alert_id: int):
         f"📊 Tỷ lệ 15p: <b>{ratio_str}</b>\n"
         f"<a href='{app_link}'>Xem alert →</a>"
     )
-    await _send_telegram(text, alert_id=alert_id)
+    await _send_telegram(text, alert_id=alert_id, event_type="m1_alert_confirmation")
 
 
 async def send_cycle_breakout_email(cycle_id: int):
@@ -410,8 +457,14 @@ async def send_cycle_breakout_email(cycle_id: int):
         f"<a href='{app_link}'>Xem cycle →</a>"
     )
     await asyncio.gather(
-        _send_email(subject, html, cycle_id=cycle_id),
-        _send_telegram(tg_text, cycle_id=cycle_id),
+        _send_email(
+            subject,
+            html,
+            cycle_id=cycle_id,
+            event_type="m3_cycle_breakout",
+            preview_text=_preview_text(tg_text),
+        ),
+        _send_telegram(tg_text, cycle_id=cycle_id, event_type="m3_cycle_breakout"),
     )
 
 
@@ -436,8 +489,14 @@ async def send_cycle_10day_warning_email(cycle_id: int):
         f"<a href='{app_link}'>Theo dõi →</a>"
     )
     await asyncio.gather(
-        _send_email(subject, html, cycle_id=cycle_id),
-        _send_telegram(tg_text, cycle_id=cycle_id),
+        _send_email(
+            subject,
+            html,
+            cycle_id=cycle_id,
+            event_type="m3_cycle_10d",
+            preview_text=_preview_text(tg_text),
+        ),
+        _send_telegram(tg_text, cycle_id=cycle_id, event_type="m3_cycle_10d"),
     )
 
 
@@ -460,8 +519,14 @@ async def send_cycle_bottom_email(cycle_id: int):
         f"<a href='{app_link}'>Xem cycle →</a>"
     )
     await asyncio.gather(
-        _send_email(subject, html, cycle_id=cycle_id),
-        _send_telegram(tg_text, cycle_id=cycle_id),
+        _send_email(
+            subject,
+            html,
+            cycle_id=cycle_id,
+            event_type="m3_cycle_bottom",
+            preview_text=_preview_text(tg_text),
+        ),
+        _send_telegram(tg_text, cycle_id=cycle_id, event_type="m3_cycle_bottom"),
     )
 
 
@@ -509,7 +574,8 @@ async def send_m3_daily_digest(trade_date, summary: dict) -> None:
             lines.append(f"  … +{len(invalidations) - 5} mã khác")
 
     lines.append(f"<a href='{settings.FRONTEND_URL}/cycles'>Xem M3 →</a>")
-    await _send_telegram("\n".join(lines))
+    text = "\n".join(lines)
+    await _send_telegram(text, event_type="m3_daily_digest")
 
 
 # ── Replay digest notifications ────────────────────────────────────────────
@@ -542,7 +608,7 @@ async def send_m1_replay_digest(
         + "\n".join(lines)
         + f"\n<i>Run: {run_id[:8]}</i>"
     )
-    await _send_telegram(text)
+    await _send_telegram(text, event_type="m1_replay_digest")
 
 
 async def send_m3_replay_digest(
@@ -572,4 +638,4 @@ async def send_m3_replay_digest(
         + ("\n".join(lines) if lines else "  (không có candidate)")
         + f"\n<i>Run: {run_id[:8]}</i>"
     )
-    await _send_telegram(text)
+    await _send_telegram(text, event_type="m3_replay_digest")
