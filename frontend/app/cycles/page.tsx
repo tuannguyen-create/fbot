@@ -11,6 +11,8 @@ import Link from 'next/link'
 
 export default function CyclesPage() {
   const [phase, setPhase] = useState<string>('distribution_in_progress,bottoming_candidate')
+  const [candidateDays, setCandidateDays] = useState<number>(25)
+  const [repeatMin, setRepeatMin] = useState<number>(1)
 
   const { data, isLoading } = useQuery({
     queryKey: ['cycles', 'list', phase],
@@ -20,8 +22,8 @@ export default function CyclesPage() {
 
   const cycles = data?.cycles ?? []
   const { data: candidatesData, isLoading: candidatesLoading, isError: candidatesError } = useQuery({
-    queryKey: ['cycles', 'candidates'],
-    queryFn: () => cyclesApi.candidates({ days: 25, limit: 50 }),
+    queryKey: ['cycles', 'candidates', candidateDays],
+    queryFn: () => cyclesApi.candidates({ days: candidateDays, limit: 200 }),
     retry: 1,
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
@@ -32,7 +34,8 @@ export default function CyclesPage() {
     refetchInterval: 60_000,
   })
   const candidates = candidatesData?.candidates ?? []
-  const repeatSummary = candidatesData?.repeat_summary ?? []
+  const repeatSummary = (candidatesData?.repeat_summary ?? []).filter((item) => repeatMin <= 1 || item.count >= repeatMin)
+  const filteredCandidates = candidates.filter((item) => repeatMin <= 1 || item.ticker_breakout_count >= repeatMin)
 
   return (
     <div className="space-y-4 max-w-3xl mx-auto">
@@ -123,18 +126,41 @@ export default function CyclesPage() {
           <div>
             <h2 className="text-sm font-semibold text-gray-800">Breakout M3 gần đây</h2>
             <p className="text-xs text-gray-400">
-              Scan daily 25 ngày, hiện có dữ liệu cho {candidatesData?.tickers_with_data ?? '—'} mã
+              Scan daily {candidateDays} ngày, hiện có dữ liệu cho {candidatesData?.tickers_with_data ?? '—'} mã
             </p>
           </div>
           <span className="text-xs text-gray-400">
-            {candidatesLoading ? 'Đang quét…' : `${candidatesData?.total ?? 0} candidates`}
+            {candidatesLoading ? 'Đang quét…' : `${filteredCandidates.length}/${candidatesData?.total ?? 0} candidates`}
           </span>
+        </div>
+
+        <div className="mb-3 flex flex-wrap gap-2">
+          <select
+            value={String(candidateDays)}
+            onChange={(e) => setCandidateDays(Number(e.target.value))}
+            className="border border-gray-300 rounded px-2 py-1 text-sm"
+          >
+            <option value="5">Cửa sổ 5 ngày</option>
+            <option value="10">Cửa sổ 10 ngày</option>
+            <option value="25">Cửa sổ 25 ngày</option>
+            <option value="40">Cửa sổ 40 ngày</option>
+          </select>
+          <select
+            value={String(repeatMin)}
+            onChange={(e) => setRepeatMin(Number(e.target.value))}
+            className="border border-gray-300 rounded px-2 py-1 text-sm"
+          >
+            <option value="1">Tất cả breakout</option>
+            <option value="2">Chỉ mã lặp từ 2 lần</option>
+            <option value="3">Chỉ mã lặp từ 3 lần</option>
+            <option value="5">Chỉ mã lặp từ 5 lần</option>
+          </select>
         </div>
 
         {repeatSummary.length > 0 && (
           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
             <div className="text-sm font-semibold text-amber-900">
-              Mã breakout lặp nhiều trong {candidatesData?.days_scanned ?? 25} ngày
+              Mã breakout lặp nhiều trong {candidatesData?.days_scanned ?? candidateDays} ngày
             </div>
             <div className="mt-2 flex flex-wrap gap-2 text-xs">
               {repeatSummary.slice(0, 8).map((item) => (
@@ -155,13 +181,13 @@ export default function CyclesPage() {
           <div className="text-center py-8 text-amber-600 border border-dashed border-amber-200 rounded-lg">
             Không tải được breakout M3 gần đây. API scan đang chậm hoặc vừa timeout, thử tải lại sau.
           </div>
-        ) : candidates.length === 0 ? (
+        ) : filteredCandidates.length === 0 ? (
           <div className="text-center py-8 text-gray-400 border border-dashed border-gray-200 rounded-lg">
-            Chưa có breakout M3 nào để hiển thị
+            Không có breakout nào khớp bộ lọc hiện tại
           </div>
         ) : (
           <div className="space-y-3">
-            {candidates.map((c) => (
+            {filteredCandidates.map((c) => (
               <div key={`${c.ticker}-${c.breakout_date}`} className="bg-white rounded-lg border border-gray-200 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -180,7 +206,7 @@ export default function CyclesPage() {
                     )}
                     {c.ticker_breakout_count > 1 && (
                       <span className="text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                        Lặp {c.ticker_breakout_count} lần / {candidatesData?.days_scanned ?? 25} ngày
+                        Lặp {c.ticker_breakout_count} lần / {candidatesData?.days_scanned ?? candidateDays} ngày
                       </span>
                     )}
                   </div>
