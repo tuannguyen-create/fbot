@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Telegram (optional — empty = disabled)
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_IDS: str = ""  # comma-separated chat IDs
-    M1_TELEGRAM_FIRED_MIN_RATIO: float = 2.5
+    M1_TELEGRAM_FIRED_MIN_RATIO: float = 2.0
     M1_TELEGRAM_FIRED_MIN_VOLUME: int = 25_000
     M1_TELEGRAM_EXTREME_RATIO: float = 4.0
     M1_TELEGRAM_EXTREME_VOLUME: int = 150_000
