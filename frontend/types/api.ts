@@ -32,8 +32,14 @@ export interface AppSettings {
   fiinquant_intraday_ticker_limit?: number
   m1_telegram_fired_min_ratio?: number
   m1_telegram_fired_min_volume?: number
-  m1_telegram_fired_per_minute_cap?: number
-  m1_telegram_confirm_per_minute_cap?: number
+  m1_telegram_extreme_ratio?: number
+  m1_telegram_extreme_volume?: number
+  m1_telegram_confirm_min_ratio?: number
+  m1_telegram_confirm_min_volume?: number
+  m1_telegram_fired_repeat_ratio_multiplier?: number
+  m1_telegram_fired_repeat_volume_multiplier?: number
+  m1_telegram_confirm_repeat_ratio_multiplier?: number
+  m1_telegram_confirm_repeat_volume_multiplier?: number
   stream_status: 'connected' | 'disconnected'
   telegram_configured?: boolean
   email_configured?: boolean

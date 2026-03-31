@@ -17,9 +17,6 @@ _pool = None
 _resend = None
 _redis = None
 
-_GRADE_RANK = {"A": 3, "B": 2, "C": 1}
-
-
 def _preview_text(text: str) -> str:
     """Strip HTML tags/entities so UI can render a readable one-line preview."""
     plain = re.sub(r"<[^>]+>", "", text or "")
@@ -56,16 +53,10 @@ async def _log_notification(
         )
 
 
-def _quality_rank(grade: str | None) -> int:
-    return _GRADE_RANK.get((grade or "").upper(), 0)
-
-
 def should_send_m1_fired_telegram(alert: dict) -> bool:
     ratio = float(alert.get("ratio_5d") or 0)
     volume = int(alert.get("volume") or 0)
-    quality_grade = alert.get("quality_grade")
-    strong_quality = _quality_rank(quality_grade) >= _quality_rank("A")
-    normal_ok = strong_quality and ratio >= settings.M1_TELEGRAM_FIRED_MIN_RATIO and volume >= settings.M1_TELEGRAM_FIRED_MIN_VOLUME
+    normal_ok = ratio >= settings.M1_TELEGRAM_FIRED_MIN_RATIO and volume >= settings.M1_TELEGRAM_FIRED_MIN_VOLUME
     extreme_ok = ratio >= settings.M1_TELEGRAM_EXTREME_RATIO and volume >= settings.M1_TELEGRAM_EXTREME_VOLUME
     return normal_ok or extreme_ok
 
@@ -75,42 +66,76 @@ def should_send_m1_confirmation_telegram(alert: dict) -> bool:
         return False
     ratio = float(alert.get("ratio_15m") or 0)
     volume = int(alert.get("volume") or 0)
-    quality_grade = alert.get("quality_grade")
-    quality_ok = _quality_rank(quality_grade) >= _quality_rank("B")
-    extreme_ok = ratio >= 2.0 and volume >= settings.M1_TELEGRAM_FIRED_MIN_VOLUME
-    return (
-        ratio >= settings.M1_TELEGRAM_CONFIRM_MIN_RATIO
-        and volume >= settings.M1_TELEGRAM_CONFIRM_MIN_VOLUME
-        and (quality_ok or extreme_ok)
-    )
+    return ratio >= settings.M1_TELEGRAM_CONFIRM_MIN_RATIO and volume >= settings.M1_TELEGRAM_CONFIRM_MIN_VOLUME
 
 
-async def _acquire_m1_telegram_slot(
+def _redis_hash_value(payload: dict, key: str, default: str = "") -> str:
+    if key in payload:
+        value = payload[key]
+    else:
+        value = payload.get(key.encode(), default)
+    if isinstance(value, bytes):
+        return value.decode()
+    return str(value) if value is not None else default
+
+
+async def _record_m1_progress(
     *,
     ticker: str,
     event_kind: str,
     event_ts: datetime,
-    cooldown_minutes: int,
-    per_minute_cap: int,
+    ratio: float,
+    volume: int,
+) -> None:
+    if _redis is None:
+        return
+
+    trade_date = to_ict(event_ts).strftime("%Y%m%d")
+    key = f"notif:m1:{event_kind}:ticker:{ticker}:{trade_date}"
+    await _redis.hset(key, "ratio", str(ratio))
+    await _redis.hset(key, "volume", str(volume))
+    await _redis.hset(key, "ts", event_ts.isoformat())
+    await _redis.expire(key, 60 * 60 * 36)
+
+
+async def _should_send_m1_progressive(
+    *,
+    ticker: str,
+    event_kind: str,
+    event_ts: datetime,
+    ratio: float,
+    volume: int,
+    ratio_multiplier: float,
+    volume_multiplier: float,
 ) -> bool:
     if _redis is None:
         return True
 
-    minute_key = to_ict(event_ts).strftime("%Y%m%d%H%M")
-    cooldown_key = f"notif:m1:{event_kind}:ticker:{ticker}"
-    minute_counter_key = f"notif:m1:{event_kind}:minute:{minute_key}"
+    trade_date = to_ict(event_ts).strftime("%Y%m%d")
+    key = f"notif:m1:{event_kind}:ticker:{ticker}:{trade_date}"
+    payload = await _redis.hgetall(key)
+    if not payload:
+        await _record_m1_progress(
+            ticker=ticker,
+            event_kind=event_kind,
+            event_ts=event_ts,
+            ratio=ratio,
+            volume=volume,
+        )
+        return True
 
-    if await _redis.exists(cooldown_key):
-        return False
-
-    current = await _redis.get(minute_counter_key)
-    current_count = int(current) if current else 0
-    if current_count >= per_minute_cap:
-        return False
-
-    await _redis.setex(cooldown_key, cooldown_minutes * 60, "1")
-    await _redis.setex(minute_counter_key, 120, str(current_count + 1))
-    return True
+    prev_ratio = float(_redis_hash_value(payload, "ratio", "0") or 0)
+    prev_volume = int(float(_redis_hash_value(payload, "volume", "0") or 0))
+    stronger = ratio >= prev_ratio * ratio_multiplier or volume >= prev_volume * volume_multiplier
+    if stronger:
+        await _record_m1_progress(
+            ticker=ticker,
+            event_kind=event_kind,
+            event_ts=event_ts,
+            ratio=ratio,
+            volume=volume,
+        )
+    return stronger
 
 
 def inject_deps(pool, redis=None):
@@ -461,16 +486,18 @@ async def send_volume_alert_email(alert_id: int):
         fired_at = alert.get("fired_at") or alert.get("bar_time")
         if isinstance(fired_at, str):
             fired_at = datetime.fromisoformat(fired_at.replace("Z", "+00:00"))
-        if fired_at and await _acquire_m1_telegram_slot(
+        if fired_at and await _should_send_m1_progressive(
             ticker=ticker,
             event_kind="fired",
             event_ts=fired_at,
-            cooldown_minutes=settings.M1_TELEGRAM_FIRED_COOLDOWN_MINUTES,
-            per_minute_cap=settings.M1_TELEGRAM_FIRED_PER_MINUTE_CAP,
+            ratio=float(alert.get("ratio_5d") or 0),
+            volume=int(alert.get("volume") or 0),
+            ratio_multiplier=settings.M1_TELEGRAM_FIRED_REPEAT_RATIO_MULTIPLIER,
+            volume_multiplier=settings.M1_TELEGRAM_FIRED_REPEAT_VOLUME_MULTIPLIER,
         ):
             send_tasks.append(_send_telegram(tg_text, alert_id=alert_id, event_type="m1_alert_fired"))
         else:
-            logger.info("M1 fired Telegram suppressed by cooldown/cap: %s alert_id=%s", ticker, alert_id)
+            logger.info("M1 fired Telegram suppressed by progression rule: %s alert_id=%s", ticker, alert_id)
     else:
         logger.info("M1 fired Telegram suppressed by policy: %s alert_id=%s", ticker, alert_id)
     await asyncio.gather(
@@ -528,14 +555,16 @@ async def send_volume_alert_confirmation(alert_id: int):
     confirmed_at = alert.get("confirmed_at") or alert.get("bar_time") or alert.get("fired_at")
     if isinstance(confirmed_at, str):
         confirmed_at = datetime.fromisoformat(confirmed_at.replace("Z", "+00:00"))
-    if confirmed_at and not await _acquire_m1_telegram_slot(
+    if confirmed_at and not await _should_send_m1_progressive(
         ticker=ticker,
         event_kind="confirm",
         event_ts=confirmed_at,
-        cooldown_minutes=settings.M1_TELEGRAM_CONFIRM_COOLDOWN_MINUTES,
-        per_minute_cap=settings.M1_TELEGRAM_CONFIRM_PER_MINUTE_CAP,
+        ratio=float(alert.get("ratio_15m") or 0),
+        volume=int(alert.get("volume") or 0),
+        ratio_multiplier=settings.M1_TELEGRAM_CONFIRM_REPEAT_RATIO_MULTIPLIER,
+        volume_multiplier=settings.M1_TELEGRAM_CONFIRM_REPEAT_VOLUME_MULTIPLIER,
     ):
-        logger.info("M1 confirmation Telegram suppressed by cooldown/cap: %s alert_id=%s", ticker, alert_id)
+        logger.info("M1 confirmation Telegram suppressed by progression rule: %s alert_id=%s", ticker, alert_id)
         return
     await _send_telegram(text, alert_id=alert_id, event_type="m1_alert_confirmation")
 

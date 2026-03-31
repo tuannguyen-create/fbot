@@ -148,10 +148,10 @@ export default function SettingsPage() {
           M3/daily thực tế: {settings?.effective_daily_ticker_count ?? settings?.active_ticker_count} mã
         </p>
         <p className="mt-2 text-gray-600">
-          Telegram M1 đã chuyển sang chế độ ít nhiễu: live chỉ bắn loại mạnh
-          ({settings?.m1_telegram_fired_min_ratio ?? 5}x và vol tối thiểu {settings?.m1_telegram_fired_min_volume?.toLocaleString('en-US') ?? '50,000'}),
-          tối đa {settings?.m1_telegram_fired_per_minute_cap ?? 3} tin/phút; kết quả 15p chỉ bắn mã đã xác nhận,
-          tối đa {settings?.m1_telegram_confirm_per_minute_cap ?? 2} tin/phút.
+          Telegram M1 chỉ bắn khi tín hiệu đủ mạnh:
+          live từ {settings?.m1_telegram_fired_min_ratio ?? 5}x và vol tối thiểu {settings?.m1_telegram_fired_min_volume?.toLocaleString('en-US') ?? '50,000'},
+          hoặc trường hợp cực mạnh từ {settings?.m1_telegram_extreme_ratio ?? 8}x và {settings?.m1_telegram_extreme_volume?.toLocaleString('en-US') ?? '300,000'}.
+          Nếu cùng một mã lặp lại, bot chỉ gửi tiếp khi tín hiệu mạnh lên rõ rệt theo tỷ lệ/khối lượng; kết quả 15p chỉ gửi mã đã xác nhận.
         </p>
         {!settings?.telegram_configured && (
           <p className="mt-2 text-red-500">
