@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.config import settings
 from app.database import get_db
+from app.services import notification as notification_service
 
 router = APIRouter()
 
@@ -95,7 +96,8 @@ async def review_notifications(
         if channel == "telegram":
             alert_rows = await conn.fetch(
                 f"""
-                SELECT a.id, a.ticker, a.status, a.fired_at, a.confirmed_at, a.ratio_5d, a.ratio_15m
+                SELECT a.id, a.ticker, a.status, a.fired_at, a.confirmed_at, a.ratio_5d, a.ratio_15m,
+                       a.volume, a.quality_grade, a.in_magic_window
                 FROM volume_alerts a
                 WHERE a.origin='live'
                   AND DATE(a.bar_time AT TIME ZONE 'Asia/Ho_Chi_Minh') >= {start_expr}
@@ -109,13 +111,18 @@ async def review_notifications(
                 """
             )
             for row in alert_rows:
+                row_dict = dict(row)
                 if row["status"] == "fired":
+                    if not notification_service.should_send_m1_fired_telegram(row_dict):
+                        continue
                     title = f"M1 live — {row['ticker']}"
-                    preview = f"{row['ticker']} vừa có khối lượng bất thường, đang chờ xác nhận 15 phút."
+                    preview = f"{row['ticker']} vừa có khối lượng bất thường mạnh, đủ ngưỡng để Telegram bắn live."
                     event_type = "m1_alert_fired"
                     ts = row["fired_at"]
                 else:
-                    label = "xác nhận" if row["status"] == "confirmed" else "không xác nhận"
+                    if not notification_service.should_send_m1_confirmation_telegram(row_dict):
+                        continue
+                    label = "xác nhận"
                     ratio = row["ratio_15m"]
                     ratio_str = f"{ratio:.2f}x" if ratio is not None else "N/A"
                     title = f"M1 kết quả — {row['ticker']}"

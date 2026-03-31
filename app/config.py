@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     # Telegram (optional — empty = disabled)
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_IDS: str = ""  # comma-separated chat IDs
+    M1_TELEGRAM_FIRED_MIN_RATIO: float = 5.0
+    M1_TELEGRAM_FIRED_MIN_VOLUME: int = 50_000
+    M1_TELEGRAM_EXTREME_RATIO: float = 8.0
+    M1_TELEGRAM_EXTREME_VOLUME: int = 300_000
+    M1_TELEGRAM_CONFIRM_MIN_RATIO: float = 1.5
+    M1_TELEGRAM_CONFIRM_MIN_VOLUME: int = 20_000
+    M1_TELEGRAM_FIRED_COOLDOWN_MINUTES: int = 60
+    M1_TELEGRAM_CONFIRM_COOLDOWN_MINUTES: int = 60
+    M1_TELEGRAM_FIRED_PER_MINUTE_CAP: int = 3
+    M1_TELEGRAM_CONFIRM_PER_MINUTE_CAP: int = 2
 
     # App
     APP_ENV: str = "development"

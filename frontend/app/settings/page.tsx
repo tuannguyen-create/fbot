@@ -147,6 +147,12 @@ export default function SettingsPage() {
         <p className="mt-1 text-blue-500">
           M3/daily thực tế: {settings?.effective_daily_ticker_count ?? settings?.active_ticker_count} mã
         </p>
+        <p className="mt-2 text-gray-600">
+          Telegram M1 đã chuyển sang chế độ ít nhiễu: live chỉ bắn loại mạnh
+          ({settings?.m1_telegram_fired_min_ratio ?? 5}x và vol tối thiểu {settings?.m1_telegram_fired_min_volume?.toLocaleString('en-US') ?? '50,000'}),
+          tối đa {settings?.m1_telegram_fired_per_minute_cap ?? 3} tin/phút; kết quả 15p chỉ bắn mã đã xác nhận,
+          tối đa {settings?.m1_telegram_confirm_per_minute_cap ?? 2} tin/phút.
+        </p>
         {!settings?.telegram_configured && (
           <p className="mt-2 text-red-500">
             Telegram chưa cấu hình, nên dù app có alert/cycle thì bot sẽ không bắn tin nhắn.
@@ -191,7 +197,7 @@ export default function SettingsPage() {
         <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600 space-y-1">
           <p><b>Đã gửi</b>: tin Telegram đã được bot gửi thật.</p>
           <p><b>Lỗi gửi</b>: bot đã cố gửi nhưng Telegram trả lỗi.</p>
-          <p><b>Tin dự kiến</b>: tin lẽ ra sẽ gửi trong ngày, dùng để review khi Telegram chưa cấu hình hoặc bị lỗi.</p>
+          <p><b>Tin dự kiến</b>: chỉ gồm các tin còn đủ điều kiện theo policy hiện tại, không phải toàn bộ alert thô trên UI.</p>
         </div>
 
         {!reviewData?.telegram_configured && (

@@ -27,6 +27,7 @@ def mock_redis():
     redis.hset = AsyncMock()
     redis.expire = AsyncMock()
     redis.exists = AsyncMock(return_value=0)
+    redis.get = AsyncMock(return_value=None)
     redis.setex = AsyncMock()
     redis.pipeline = MagicMock(return_value=AsyncMock(
         hset=AsyncMock(),

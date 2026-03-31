@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 _pool = None
 _resend = None
+_redis = None
+
+_GRADE_RANK = {"A": 3, "B": 2, "C": 1}
 
 
 def _preview_text(text: str) -> str:
@@ -53,9 +56,67 @@ async def _log_notification(
         )
 
 
-def inject_deps(pool):
-    global _pool, _resend
+def _quality_rank(grade: str | None) -> int:
+    return _GRADE_RANK.get((grade or "").upper(), 0)
+
+
+def should_send_m1_fired_telegram(alert: dict) -> bool:
+    ratio = float(alert.get("ratio_5d") or 0)
+    volume = int(alert.get("volume") or 0)
+    quality_grade = alert.get("quality_grade")
+    strong_quality = _quality_rank(quality_grade) >= _quality_rank("A")
+    normal_ok = strong_quality and ratio >= settings.M1_TELEGRAM_FIRED_MIN_RATIO and volume >= settings.M1_TELEGRAM_FIRED_MIN_VOLUME
+    extreme_ok = ratio >= settings.M1_TELEGRAM_EXTREME_RATIO and volume >= settings.M1_TELEGRAM_EXTREME_VOLUME
+    return normal_ok or extreme_ok
+
+
+def should_send_m1_confirmation_telegram(alert: dict) -> bool:
+    if alert.get("status") != "confirmed":
+        return False
+    ratio = float(alert.get("ratio_15m") or 0)
+    volume = int(alert.get("volume") or 0)
+    quality_grade = alert.get("quality_grade")
+    quality_ok = _quality_rank(quality_grade) >= _quality_rank("B")
+    extreme_ok = ratio >= 2.0 and volume >= settings.M1_TELEGRAM_FIRED_MIN_VOLUME
+    return (
+        ratio >= settings.M1_TELEGRAM_CONFIRM_MIN_RATIO
+        and volume >= settings.M1_TELEGRAM_CONFIRM_MIN_VOLUME
+        and (quality_ok or extreme_ok)
+    )
+
+
+async def _acquire_m1_telegram_slot(
+    *,
+    ticker: str,
+    event_kind: str,
+    event_ts: datetime,
+    cooldown_minutes: int,
+    per_minute_cap: int,
+) -> bool:
+    if _redis is None:
+        return True
+
+    minute_key = to_ict(event_ts).strftime("%Y%m%d%H%M")
+    cooldown_key = f"notif:m1:{event_kind}:ticker:{ticker}"
+    minute_counter_key = f"notif:m1:{event_kind}:minute:{minute_key}"
+
+    if await _redis.exists(cooldown_key):
+        return False
+
+    current = await _redis.get(minute_counter_key)
+    current_count = int(current) if current else 0
+    if current_count >= per_minute_cap:
+        return False
+
+    await _redis.setex(cooldown_key, cooldown_minutes * 60, "1")
+    await _redis.setex(minute_counter_key, 120, str(current_count + 1))
+    return True
+
+
+def inject_deps(pool, redis=None):
+    global _pool, _resend, _redis
     _pool = pool
+    _redis = redis
     try:
         import resend as resend_module
         resend_module.api_key = settings.RESEND_API_KEY
@@ -387,15 +448,33 @@ async def send_volume_alert_email(alert_id: int):
         f"{magic_line}"
         f"<a href='{app_link}'>Xem alert →</a>"
     )
-    await asyncio.gather(
+    send_tasks = [
         _send_email(
             subject,
             html,
             alert_id=alert_id,
             event_type="m1_alert_fired",
             preview_text=_preview_text(tg_text),
-        ),
-        _send_telegram(tg_text, alert_id=alert_id, event_type="m1_alert_fired"),
+        )
+    ]
+    if should_send_m1_fired_telegram(alert):
+        fired_at = alert.get("fired_at") or alert.get("bar_time")
+        if isinstance(fired_at, str):
+            fired_at = datetime.fromisoformat(fired_at.replace("Z", "+00:00"))
+        if fired_at and await _acquire_m1_telegram_slot(
+            ticker=ticker,
+            event_kind="fired",
+            event_ts=fired_at,
+            cooldown_minutes=settings.M1_TELEGRAM_FIRED_COOLDOWN_MINUTES,
+            per_minute_cap=settings.M1_TELEGRAM_FIRED_PER_MINUTE_CAP,
+        ):
+            send_tasks.append(_send_telegram(tg_text, alert_id=alert_id, event_type="m1_alert_fired"))
+        else:
+            logger.info("M1 fired Telegram suppressed by cooldown/cap: %s alert_id=%s", ticker, alert_id)
+    else:
+        logger.info("M1 fired Telegram suppressed by policy: %s alert_id=%s", ticker, alert_id)
+    await asyncio.gather(
+        *send_tasks,
     )
 
 
@@ -408,7 +487,11 @@ async def send_volume_alert_confirmation(alert_id: int):
 
     alert = dict(row)
     status = alert.get("status")
-    if status not in {"confirmed", "cancelled"}:
+    if status != "confirmed":
+        logger.info("M1 confirmation Telegram skipped: %s alert_id=%s status=%s", alert.get("ticker"), alert_id, status)
+        return
+    if not should_send_m1_confirmation_telegram(alert):
+        logger.info("M1 confirmation Telegram suppressed by policy: %s alert_id=%s", alert.get("ticker"), alert_id)
         return
 
     ticker = alert["ticker"]
@@ -442,6 +525,18 @@ async def send_volume_alert_confirmation(alert_id: int):
         f"📊 Tỷ lệ {window_label}: <b>{ratio_str}</b>\n"
         f"<a href='{app_link}'>Xem alert →</a>"
     )
+    confirmed_at = alert.get("confirmed_at") or alert.get("bar_time") or alert.get("fired_at")
+    if isinstance(confirmed_at, str):
+        confirmed_at = datetime.fromisoformat(confirmed_at.replace("Z", "+00:00"))
+    if confirmed_at and not await _acquire_m1_telegram_slot(
+        ticker=ticker,
+        event_kind="confirm",
+        event_ts=confirmed_at,
+        cooldown_minutes=settings.M1_TELEGRAM_CONFIRM_COOLDOWN_MINUTES,
+        per_minute_cap=settings.M1_TELEGRAM_CONFIRM_PER_MINUTE_CAP,
+    ):
+        logger.info("M1 confirmation Telegram suppressed by cooldown/cap: %s alert_id=%s", ticker, alert_id)
+        return
     await _send_telegram(text, alert_id=alert_id, event_type="m1_alert_confirmation")
 
 

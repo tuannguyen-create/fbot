@@ -30,6 +30,10 @@ export interface AppSettings {
   fiinquant_stream_ticker_limit?: number
   effective_intraday_ticker_count?: number
   fiinquant_intraday_ticker_limit?: number
+  m1_telegram_fired_min_ratio?: number
+  m1_telegram_fired_min_volume?: number
+  m1_telegram_fired_per_minute_cap?: number
+  m1_telegram_confirm_per_minute_cap?: number
   stream_status: 'connected' | 'disconnected'
   telegram_configured?: boolean
   email_configured?: boolean

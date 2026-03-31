@@ -141,7 +141,7 @@ async def lifespan(app: FastAPI):
 
     # 5. Inject deps
     baseline_service.inject_deps(pool, redis)
-    notification.inject_deps(pool)
+    notification.inject_deps(pool, redis)
     stream_ingester.inject_deps(pool, redis, alert_queue)
     alert_engine_m1.inject_deps(pool, redis, alert_queue)
     alert_engine_m3.inject_deps(pool, redis, alert_queue)
