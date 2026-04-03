@@ -49,7 +49,7 @@ function AlertsContent() {
   const { data: health } = useQuery({
     queryKey: ['health', 'alerts-page'],
     queryFn: () => healthApi.check(),
-    refetchInterval: 30_000,
+    refetchInterval: 5 * 60_000,
   })
   const { data: repeatsData, isLoading: repeatsLoading } = useQuery({
     queryKey: ['alerts', 'repeats', { ticker, status, origin, repeatDays, repeatMin }],

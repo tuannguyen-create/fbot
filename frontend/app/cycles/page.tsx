@@ -31,7 +31,7 @@ export default function CyclesPage() {
   const { data: health } = useQuery({
     queryKey: ['health', 'cycles-page'],
     queryFn: () => healthApi.check(),
-    refetchInterval: 60_000,
+    refetchInterval: 5 * 60_000,
   })
   const candidates = candidatesData?.candidates ?? []
   const repeatSummary = (candidatesData?.repeat_summary ?? []).filter((item) => repeatMin <= 1 || item.count >= repeatMin)

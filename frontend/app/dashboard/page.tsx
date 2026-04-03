@@ -34,7 +34,7 @@ export default function DashboardPage() {
   const { data: health } = useQuery({
     queryKey: ['health'],
     queryFn: () => healthApi.check(),
-    refetchInterval: 30_000,
+    refetchInterval: 5 * 60_000,
   })
 
   const today = new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Ho_Chi_Minh' })

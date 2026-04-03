@@ -17,3 +17,5 @@ def setup_logging():
     logging.getLogger("asyncpg").setLevel(logging.WARNING)
     logging.getLogger("apscheduler").setLevel(logging.INFO)
     logging.getLogger("SignalRCoreClient").setLevel(logging.WARNING)  # signalrcore's actual logger name
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)

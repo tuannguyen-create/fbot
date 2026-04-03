@@ -16,7 +16,7 @@ export default function SettingsPage() {
   const { data: health, refetch: refetchHealth } = useQuery({
     queryKey: ['health'],
     queryFn: () => healthApi.check(),
-    refetchInterval: 10_000,
+    refetchOnWindowFocus: false,
   })
 
   const [thresholds, setThresholds] = useState({
@@ -46,10 +46,10 @@ export default function SettingsPage() {
     },
   })
 
-  const { data: reviewData, isLoading: reviewLoading } = useQuery({
+  const { data: reviewData, isLoading: reviewLoading, refetch: refetchReview } = useQuery({
     queryKey: ['notifications', 'review', reviewWindow],
     queryFn: () => notificationsApi.review({ window: reviewWindow, channel: 'telegram', limit: 30 }),
-    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
   })
 
   if (isLoading) return <div className="text-center py-8 text-gray-400">Đang tải...</div>
@@ -166,23 +166,31 @@ export default function SettingsPage() {
           <div>
             <h2 className="font-semibold text-gray-700">Review thông báo</h2>
             <p className="text-xs text-gray-400">
-              Tự động cập nhật các tin Telegram đã gửi hoặc lẽ ra sẽ gửi để bạn review trong ngày và xem lại lịch sử.
+              Review các tin Telegram đã gửi hoặc lẽ ra sẽ gửi. Chỉ làm mới khi bạn bấm nút, để tránh poll nặng không cần thiết.
             </p>
           </div>
-          <div className="flex gap-1 rounded-lg bg-gray-100 p-1 text-xs">
-            {([
-              ['today', 'Hôm nay'],
-              ['7d', '7 ngày'],
-              ['30d', '30 ngày'],
-            ] as const).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setReviewWindow(key)}
-                className={`px-2 py-1 rounded ${reviewWindow === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => refetchReview()}
+              className="text-xs text-orange-600 hover:underline"
+            >
+              Làm mới review
+            </button>
+            <div className="flex gap-1 rounded-lg bg-gray-100 p-1 text-xs">
+              {([
+                ['today', 'Hôm nay'],
+                ['7d', '7 ngày'],
+                ['30d', '30 ngày'],
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setReviewWindow(key)}
+                  className={`px-2 py-1 rounded ${reviewWindow === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
