@@ -256,10 +256,16 @@ class TestReplayHistory:
         return pool, conn
 
     def _make_rows(self, n=22, breakout_idx=21, breakout_vol=4_000_000):
-        """Generate daily rows with a breakout at breakout_idx."""
+        """Generate daily rows with a breakout at breakout_idx.
+
+        Rows start far enough in the past that patching date.today() to
+        a recent date places the entire series within replay_history's scan window.
+        """
         rows = []
-        d = date(2026, 2, 1)
         from app.utils.trading_hours import add_trading_days
+        # Start ~50 trading days ago so the breakout row is always recent enough
+        # regardless of what date.today() returns when the test runs.
+        d = add_trading_days(date.today(), -50)
         for i in range(n):
             vol = breakout_vol if i == breakout_idx else 900_000
             close = 26000.0 if i == breakout_idx else 25000.0
@@ -284,7 +290,11 @@ class TestReplayHistory:
             "eligible_for_m3": True, "game_type": "institutional",
         }))
 
-        with patch.object(settings, "WATCHLIST", ["HPG"]):
+        with patch.object(settings, "WATCHLIST", ["HPG"]), \
+             patch("app.services.alert_engine_m3.universe_service.get_active_tickers", new=AsyncMock(return_value=["HPG"])), \
+             patch("app.services.alert_engine_m3.date") as mock_date:
+            mock_date.today.return_value = rows[-1]["date"]
+            mock_date.side_effect = lambda *a, **k: date(*a, **k)
             result = await alert_engine_m3.replay_history(days=25, apply=False)
 
         results = result["candidates"]
@@ -309,7 +319,11 @@ class TestReplayHistory:
         conn.fetchval = AsyncMock(return_value=99)  # INSERT RETURNING id
 
         with patch.object(settings, "WATCHLIST", ["HPG"]), \
-             patch("app.services.alert_engine_m3.notification") as mock_notif:
+             patch("app.services.alert_engine_m3.universe_service.get_active_tickers", new=AsyncMock(return_value=["HPG"])), \
+             patch("app.services.alert_engine_m3.notification") as mock_notif, \
+             patch("app.services.alert_engine_m3.date") as mock_date:
+            mock_date.today.return_value = rows[-1]["date"]
+            mock_date.side_effect = lambda *a, **k: date(*a, **k)
             mock_notif.send_cycle_breakout_email = AsyncMock()
             mock_notif.send_m3_replay_digest = AsyncMock()
             result = await alert_engine_m3.replay_history(days=25, apply=True)
@@ -333,7 +347,11 @@ class TestReplayHistory:
             "eligible_for_m3": True, "game_type": "institutional",
         }))
 
-        with patch.object(settings, "WATCHLIST", ["HPG"]):
+        with patch.object(settings, "WATCHLIST", ["HPG"]), \
+             patch("app.services.alert_engine_m3.universe_service.get_active_tickers", new=AsyncMock(return_value=["HPG"])), \
+             patch("app.services.alert_engine_m3.date") as mock_date:
+            mock_date.today.return_value = rows[-1]["date"]
+            mock_date.side_effect = lambda *a, **k: date(*a, **k)
             result = await alert_engine_m3.replay_history(days=25, apply=True)
 
         matching = [r for r in result["candidates"] if r["ticker"] == "HPG"]
