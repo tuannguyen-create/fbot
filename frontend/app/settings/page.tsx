@@ -7,6 +7,7 @@ import { formatDateTimeICT } from '@/lib/formatters'
 
 export default function SettingsPage() {
   const qc = useQueryClient()
+  const [reviewEnabled, setReviewEnabled] = useState(false)
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ['settings'],
@@ -50,7 +51,9 @@ export default function SettingsPage() {
     queryKey: ['notifications', 'review', reviewWindow],
     queryFn: () => notificationsApi.review({ window: reviewWindow, channel: 'telegram', limit: 30 }),
     refetchOnWindowFocus: false,
+    enabled: reviewEnabled,
   })
+  const reviewItems = reviewData?.items ?? []
 
   if (isLoading) return <div className="text-center py-8 text-gray-400">Đang tải...</div>
 
@@ -170,12 +173,21 @@ export default function SettingsPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => refetchReview()}
-              className="text-xs text-orange-600 hover:underline"
-            >
-              Làm mới review
-            </button>
+            {!reviewEnabled ? (
+              <button
+                onClick={() => setReviewEnabled(true)}
+                className="text-xs text-orange-600 hover:underline"
+              >
+                Tải review
+              </button>
+            ) : (
+              <button
+                onClick={() => refetchReview()}
+                className="text-xs text-orange-600 hover:underline"
+              >
+                Làm mới review
+              </button>
+            )}
             <div className="flex gap-1 rounded-lg bg-gray-100 p-1 text-xs">
               {([
                 ['today', 'Hôm nay'],
@@ -194,13 +206,17 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {reviewData && (
+        {!reviewEnabled ? (
+          <div className="rounded-lg border border-dashed border-gray-200 px-4 py-8 text-center text-sm text-gray-400">
+            Review thông báo chưa được tải. Bấm <b>Tải review</b> khi cần xem log/draft Telegram.
+          </div>
+        ) : reviewData ? (
           <div className="grid grid-cols-3 gap-3 text-sm">
             <MiniStat label="Đã gửi" value={reviewData.sent_count} color="text-green-600" />
             <MiniStat label="Lỗi gửi" value={reviewData.failed_count} color="text-red-600" />
             <MiniStat label="Tin dự kiến" value={reviewData.draft_count} color="text-amber-600" />
           </div>
-        )}
+        ) : null}
 
         <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600 space-y-1">
           <p><b>Đã gửi</b>: tin Telegram đã được bot gửi thật.</p>
@@ -208,21 +224,21 @@ export default function SettingsPage() {
           <p><b>Tin dự kiến</b>: chỉ gồm các tin còn đủ điều kiện theo policy hiện tại, không phải toàn bộ alert thô trên UI.</p>
         </div>
 
-        {!reviewData?.telegram_configured && (
+        {reviewEnabled && !reviewData?.telegram_configured && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
             Telegram chưa cấu hình hoặc chưa đầy đủ. Danh sách dưới đây sẽ đóng vai trò <b>review feed</b> để thấy các tin lẽ ra sẽ đi trong ngày.
           </div>
         )}
 
-        {reviewLoading ? (
+        {reviewEnabled && reviewLoading ? (
           <div className="text-sm text-gray-400">Đang tải review thông báo...</div>
-        ) : !reviewData || reviewData.items.length === 0 ? (
+        ) : reviewEnabled && reviewItems.length === 0 ? (
           <div className="rounded-lg border border-dashed border-gray-200 px-4 py-8 text-center text-sm text-gray-400">
             Chưa có activity nào trong cửa sổ này.
           </div>
-        ) : (
+        ) : reviewEnabled ? (
           <div className="space-y-3">
-            {reviewData.items.map((item) => (
+            {reviewItems.map((item) => (
               <div key={item.id} className="rounded-lg border border-gray-200 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-1">
@@ -257,7 +273,7 @@ export default function SettingsPage() {
               </div>
             ))}
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   )

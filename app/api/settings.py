@@ -1,5 +1,6 @@
 """App Settings API."""
 import logging
+import time
 from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -11,6 +12,9 @@ from app.services import stream_ingester, universe_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_settings_cache: dict | None = None
+_settings_cache_loaded_at = 0.0
+_SETTINGS_CACHE_TTL_SECS = 60
 
 
 class ThresholdUpdate(BaseModel):
@@ -26,13 +30,18 @@ async def _get_db_settings(conn) -> dict:
 
 @router.get("")
 async def get_settings(pool: asyncpg.Pool = Depends(get_db)):
+    global _settings_cache, _settings_cache_loaded_at
+
+    if _settings_cache is not None and (time.monotonic() - _settings_cache_loaded_at) < _SETTINGS_CACHE_TTL_SECS:
+        return _settings_cache
+
     async with pool.acquire() as conn:
         db_cfg = await _get_db_settings(conn)
     active_tickers = await universe_service.get_active_tickers()
     telegram_configured = bool(app_settings.TELEGRAM_BOT_TOKEN and app_settings.TELEGRAM_CHAT_IDS.strip())
     email_configured = bool(app_settings.RESEND_API_KEY and app_settings.RESEND_TO.strip())
 
-    return {
+    response = {
         "success": True,
         "data": {
             "threshold_normal": float(db_cfg.get("threshold_normal", app_settings.THRESHOLD_NORMAL)),
@@ -64,10 +73,14 @@ async def get_settings(pool: asyncpg.Pool = Depends(get_db)):
             "email_configured": email_configured,
         },
     }
+    _settings_cache = response
+    _settings_cache_loaded_at = time.monotonic()
+    return response
 
 
 @router.put("/thresholds")
 async def update_thresholds(body: ThresholdUpdate, pool: asyncpg.Pool = Depends(get_db)):
+    global _settings_cache_loaded_at
     updates = {}
     if body.threshold_normal is not None:
         updates["threshold_normal"] = str(body.threshold_normal)
@@ -95,5 +108,7 @@ async def update_thresholds(body: ThresholdUpdate, pool: asyncpg.Pool = Depends(
             app_settings.THRESHOLD_MAGIC = float(updates["threshold_magic"])
         if "threshold_confirm_15m" in updates:
             app_settings.THRESHOLD_CONFIRM_15M = float(updates["threshold_confirm_15m"])
+
+        _settings_cache_loaded_at = 0.0
 
     return {"success": True, "data": {"updated": True}}

@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -15,6 +16,9 @@ from app.utils.logger import setup_logging
 
 setup_logging()
 logger = logging.getLogger(__name__)
+_health_cache: dict | None = None
+_health_cache_loaded_at = 0.0
+_HEALTH_CACHE_TTL_SECS = 60
 
 
 async def _run_alembic_migrations():
@@ -248,6 +252,11 @@ app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 
 @app.get("/api/v1/health")
 async def health():
+    global _health_cache, _health_cache_loaded_at
+
+    if _health_cache is not None and (time.monotonic() - _health_cache_loaded_at) < _HEALTH_CACHE_TTL_SECS:
+        return _health_cache
+
     from app import database, redis_client
     from app.services import stream_ingester, universe_service
 
@@ -275,7 +284,7 @@ async def health():
     telegram_configured = bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_IDS.strip())
     email_configured = bool(settings.RESEND_API_KEY and settings.RESEND_TO.strip())
 
-    return {
+    response = {
         "success": True,
         "data": {
             "db": db_status,
@@ -296,6 +305,9 @@ async def health():
             "timestamp": datetime.now(timezone.utc).isoformat(),
         },
     }
+    _health_cache = response
+    _health_cache_loaded_at = time.monotonic()
+    return response
 
 
 @app.get("/")
